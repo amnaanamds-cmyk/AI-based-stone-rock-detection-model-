@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Upload scene{% endblock %}
+{% block content %}
+<h1>Upload a study-area scene</h1>
+<p class="sub">Files are stored locally in the RockMap data folder. Use <span class="mono">rockmap stack</span> to build the scene GeoTIFF from Sentinel-2 / Landsat band files.</p>
+<div class="grid side">
+<form class="card" method="post" enctype="multipart/form-data">
+  <label for="name">Scene name</label>
+  <input type="text" id="name" name="name" placeholder="e.g. Kohat Plateau, Sentinel-2 2026-03-14">
+
+  <label for="scene">Multispectral scene (GeoTIFF) *</label>
+  <input type="file" id="scene" name="scene" accept=".tif,.tiff,.vrt,.img,.jp2" required>
+  <p class="hint">At least 6 bands in this order: blue, green, red, NIR, SWIR-1, SWIR-2 (Sentinel-2 B2 B3 B4 B8 B11 B12 · Landsat 8/9 B2–B7). An optional 7th band may hold the SCL / QA_PIXEL cloud layer.</p>
+
+  <label for="sensor">Sensor / radiometric scaling</label>
+  <select id="sensor" name="sensor">
+    {% for key, s in sensors.items() %}<option value="{{ key }}" {{ 'selected' if key == 'sentinel2' }}>{{ s.name }}</option>{% endfor %}
+  </select>
+  <label class="check"><input type="checkbox" name="dos"> Apply dark-object-subtraction atmospheric correction (only for top-of-atmosphere L1C / L1 data)</label>
+
+  <label for="dem">Elevation model — SRTM DEM (optional)</label>
+  <input type="file" id="dem" name="dem" accept=".tif,.tiff,.vrt,.img">
+  <p class="hint">Any grid / projection; it is re-projected onto the scene. Adds slope, aspect, hillshade and roughness features.</p>
+
+  <label for="cloud">Cloud layer (optional)</label>
+  <input type="file" id="cloud" name="cloud" accept=".tif,.tiff,.vrt,.img,.jp2">
+  <p class="hint">Sentinel-2 SCL, Landsat QA_PIXEL or a 0/1 mask. Without it clouds are detected with the Haze Optimized Transform.</p>
+
+  <label for="reference">Reference geological map (optional — needed for training / validation)</label>
+  <input type="file" id="reference" name="reference" accept=".tif,.tiff,.geojson,.json">
+  <p class="hint">A label raster with class ids 1–7, or GeoJSON polygons.</p>
+  <label for="field">GeoJSON attribute holding the lithology</label>
+  <input type="text" id="field" name="field" value="class_id">
+  <label for="mapping">Attribute → class id mapping (JSON, optional)</label>
+  <textarea id="mapping" name="mapping" rows="4" placeholder='{"Kohat Limestone": 1, "Murree Sandstone": 2, "Alluvium": 7}'></textarea>
+
+  <p style="margin-top: 18px"><button class="btn">Upload scene</button></p>
+</form>
+<div class="card">
+  <h2>Lithology classes</h2>
+  <p class="hint" style="margin-bottom: 10px">Use these class ids in reference maps.</p>
+  <table>
+    {% for c in rock_classes %}<tr><td class="mono">{{ c.id }}</td><td><span class="swatch" style="background: {{ c.color }}"></span><b>{{ c.name }}</b><br><span class="muted" style="font-size: 12.5px">{{ c.description }}</span></td></tr>{% endfor %}
+  </table>
+</div>
+</div>
+{% endblock %}

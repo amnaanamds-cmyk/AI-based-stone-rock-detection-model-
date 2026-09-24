@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Models{% endblock %}
+{% block content %}
+<h1>Trained models</h1>
+<p class="sub">Each model bundle contains a CNN and/or the Random Forest and SVM benchmarks trained on the same samples.</p>
+<div class="card">
+{% if models %}
+<div class="table-wrap"><table>
+  <tr><th>Name</th><th>Algorithms (test kappa)</th><th>Best</th><th>DEM</th><th>Created</th><th></th></tr>
+  {% for m in models %}
+  <tr><td><a href="{{ url_for('model_page', model_id=m.id) }}"><b>{{ m.name }}</b></a></td>
+    <td>{% for a, s in m.summary.items() %}<span class="badge">{{ a|upper }} {{ '%.3f' % s.kappa }}</span> {% endfor %}</td>
+    <td>{{ algorithm_labels[m.best_algo] }}</td><td>{{ 'yes' if m.uses_dem else 'no' }}</td>
+    <td class="muted">{{ m.created[:16] }}</td>
+    <td><form class="inline" method="post" action="{{ url_for('delete_model', model_id=m.id) }}" onsubmit="return confirm('Delete this model?')"><button class="btn small danger">Delete</button></form></td></tr>
+  {% endfor %}
+</table></div>
+{% else %}<p class="empty">No models yet. Open a scene that has a reference geological map and start training.</p>{% endif %}
+</div>
+{% endblock %}

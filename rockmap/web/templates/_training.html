@@ -1,0 +1,27 @@
+{% from "_macros.html" import metrics_table, benchmark %}
+{% set mfiles = url_for('files', relpath=(model.folder if model else job.folder)) %}
+<div class="card" style="margin-bottom: 16px">
+  <div class="row"><h2 style="margin: 0">Benchmark on held-out spatial test blocks</h2><span class="spacer"></span>
+  {% if model and scene %}<a class="btn small" href="{{ url_for('scene_page', scene_id=scene.id) }}">Use this model to classify →</a>{% endif %}</div>
+  <p class="hint" style="margin-bottom: 10px">{{ '{:,}'.format(meta.n_train) }} training · {{ '{:,}'.format(meta.n_val) }} validation · {{ '{:,}'.format(meta.n_test) }} test pixels · {{ meta.feature_names|length }} features{{ ' (incl. DEM terrain)' if meta.uses_dem }}</p>
+  {{ benchmark(meta.algorithms) }}
+</div>
+<div class="grid two">
+  {% for a, m in meta.algorithms.items() %}
+  <div class="card">
+    <h2>{{ m.label }}</h2>
+    {{ metrics_table(m.test_metrics) }}
+    <img class="figure" src="{{ mfiles }}/cm_{{ a }}.png" alt="confusion matrix" style="margin-top: 12px">
+    {% if m.history %}
+      <h3>Training curve</h3>
+      <svg class="chart" data-history="{{ m.history|tojson|forceescape }}" width="100%"></svg>
+    {% endif %}
+    {% if m.feature_importance %}
+      <h3>Feature importance</h3>
+      {% set imp = m.feature_importance|dictsort(by='value', reverse=true) %}
+      {% set top = imp[0][1] %}
+      <table>{% for name, v in imp[:10] %}<tr><td class="mono">{{ name }}</td><td style="width: 55%"><div class="bar"><span style="width: {{ 100 * v / top }}%; background: var(--accent)"></span></div></td><td class="num">{{ '%.3f' % v }}</td></tr>{% endfor %}</table>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>

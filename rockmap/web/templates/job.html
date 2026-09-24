@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status, legend, metrics_table, benchmark %}
+{% block title %}Job #{{ job.id }}{% endblock %}
+{% block head %}
+{% if result and result.bounds_wgs84 %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+{% endif %}
+{% endblock %}
+{% block content %}
+<div class="row">
+  <div><h1>{{ 'Classification' if job.kind == 'classify' else 'Training' }} job #{{ job.id }} {{ status(job.status) }}</h1>
+  <p class="sub">{% if scene %}Scene: <a href="{{ url_for('scene_page', scene_id=scene.id) }}">{{ scene.name }}</a> · {% endif %}started {{ job.created }}{% if job.finished %} · finished {{ job.finished[11:] }}{% endif %}</p></div>
+</div>
+
+{% if job.status in ('queued', 'running') %}
+<div class="card" id="job-progress" data-api="{{ url_for('api_job', job_id=job.id) }}">
+  <div class="progress"><span style="width: {{ (job.progress * 100)|round|int }}%"></span></div>
+  <p class="msg muted mono" style="margin: 10px 0 0">{{ job.message }}</p>
+</div>
+{% elif job.status == 'failed' %}
+<div class="flash error"><b>Job failed.</b> {{ job.error }}</div>
+
+{% elif result %}
+{% set f = job.folder %}
+{% set files = url_for('files', relpath=f) %}
+<div class="grid side">
+  <div class="card">
+    <div class="row" data-tabgroup>
+      <div class="tabs" style="margin: 0">
+        <button type="button" class="active" data-show="pane-viewer">Map viewer</button>
+        {% if result.bounds_wgs84 %}<button type="button" data-show="pane-web">Web map</button>{% endif %}
+        <button type="button" data-show="pane-figure">Map figure</button>
+      </div>
+    </div>
+    <div id="pane-viewer" style="margin-top: 10px">
+      <div class="row" style="margin-bottom: 8px">
+        <div class="tabs" data-base-for="map-viewer" style="margin: 0">
+          <button type="button" class="active" data-src="{{ files }}/rgb.png">True colour</button>
+          <button type="button" data-src="{{ files }}/falsecolor.png">SWIR false colour</button>
+          {% if result.validation %}<button type="button" data-src="{{ files }}/reference.png">Reference map</button>{% endif %}
+          <button type="button" data-src="{{ files }}/confidence.png">Confidence</button>
+        </div>
+        <span class="spacer"></span>
+        <label class="check" style="margin: 0">Overlay opacity <input type="range" min="0" max="100" value="80" data-opacity-for="map-viewer"></label>
+      </div>
+      <div class="viewer" id="map-viewer" data-viewer>
+        <img class="base" src="{{ files }}/rgb.png" alt="base layer">
+        <img class="overlay" src="{{ files }}/classified.png" alt="classified lithology map">
+      </div>
+    </div>
+    {% if result.bounds_wgs84 %}
+    <div id="pane-web" hidden style="margin-top: 10px">
+      <div class="row" style="margin-bottom: 8px"><span class="muted">Classified map draped on a web basemap</span><span class="spacer"></span>
+        <label class="check" style="margin: 0">Opacity <input type="range" min="0" max="100" value="75" data-opacity-for="leaflet-map"></label></div>
+      <div id="leaflet-map" data-bounds="{{ result.bounds_wgs84|tojson|forceescape }}"
+           data-layers="{{ map_layers|tojson|forceescape }}"></div>
+    </div>
+    {% endif %}
+    <div id="pane-figure" hidden style="margin-top: 10px"><img class="figure" src="{{ files }}/map_figure.png" alt="map figure"></div>
+  </div>
+
+  <div class="grid" style="align-content: start">
+    <div class="card">
+      <h2>Legend &amp; area statistics</h2>
+      <div class="table-wrap"><table>
+        <tr><th>Lithology</th><th class="num">km²</th><th class="num">%</th><th></th></tr>
+        {% for s in result.area_stats if s.pixels and s.percent is not none %}
+        <tr><td><span class="swatch" style="background: {{ s.color }}"></span>{{ s.name }}</td>
+          <td class="num">{{ '%.2f' % s.area_km2 }}</td><td class="num">{{ '%.1f' % s.percent }}</td>
+          <td style="width: 70px"><div class="bar"><span style="width: {{ s.percent }}%; background: {{ s.color }}"></span></div></td></tr>
+        {% endfor %}
+      </table></div>
+      {% if result.masked_percent > 0.05 %}<p class="hint">{{ '%.1f' % result.masked_percent }} % of pixels masked (cloud / no data).</p>{% endif %}
+    </div>
+    <div class="card">
+      <h2>Run details</h2>
+      <table>
+        <tr><td class="muted">Algorithm</td><td>{{ result.algorithm_label }}</td></tr>
+        <tr><td class="muted">Model</td><td>{% if model %}<a href="{{ url_for('model_page', model_id=model.id) }}">{{ model.name }}</a>{% else %}{{ result.model }}{% endif %}</td></tr>
+        <tr><td class="muted">Region</td><td class="mono">{{ result.window|join(', ') if result.window else 'whole scene' }} ({{ result.width }}×{{ result.height }} px)</td></tr>
+        <tr><td class="muted">Mean confidence</td><td>{{ result.mean_confidence | pct }}</td></tr>
+        <tr><td class="muted">Post-processing</td><td>{{ 'majority filter %d×%d' % (result.smoothing, result.smoothing) if result.smoothing > 1 else 'none' }}</td></tr>
+        <tr><td class="muted">Processing time</td><td>{{ result.seconds }} s</td></tr>
+      </table>
+      <h3>Downloads</h3>
+      <p class="row">
+        <a class="btn small ghost" href="{{ files }}/classified.tif?download=1">Map (GeoTIFF)</a>
+        <a class="btn small ghost" href="{{ files }}/confidence.tif?download=1">Confidence (GeoTIFF)</a>
+        <a class="btn small ghost" href="{{ files }}/map_figure.png?download=1">Map figure (PNG)</a>
+        <a class="btn small ghost" href="{{ files }}/result.json?download=1">Report (JSON)</a>
+      </p>
+    </div>
+  </div>
+</div>
+
+{% if result.validation %}
+<div class="grid two" style="margin-top: 16px">
+  <div class="card">
+    <h2>Validation against reference geological map</h2>
+    {{ metrics_table(result.validation) }}
+  </div>
+  <div class="card">
+    <h2>Confusion matrix &amp; agreement</h2>
+    <div class="thumbs" style="grid-template-columns: 1fr 1fr">
+      <figure><img src="{{ files }}/validation_cm.png" alt="confusion matrix" style="image-rendering: auto"><figcaption>Row-normalised confusion matrix</figcaption></figure>
+      <figure><img src="{{ files }}/agreement.png" alt="agreement map"><figcaption><span class="swatch" style="background:#2ea043"></span>agrees · <span class="swatch" style="background:#d73027"></span>disagrees with reference</figcaption></figure>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% elif meta %}
+{% include "_training.html" %}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% from "_macros.html" import legend %}
+{% block title %}About{% endblock %}
+{% block content %}
+<h1>About RockMap</h1>
+<p class="sub">AI-Based Satellite Rock/Stone Detection and Geological Mapping System — Final Year Project, Department of Computer Science, Government Degree College Zaim, Charsadda (Bacha Khan University Charsadda). By Aleena (Roll No 40) and Amna (Roll No 39).</p>
+<div class="grid two">
+  <div class="card">
+    <h2>Processing pipeline</h2>
+    <ol>
+      <li><b>Pre-processing</b> — DN → surface reflectance, optional dark-object subtraction, cloud / shadow masking (SCL, QA_PIXEL or Haze Optimized Transform), band stacking and DEM co-registration.</li>
+      <li><b>Feature extraction</b> — 6 reflectance bands, 7 spectral indices (NDVI, clay SWIR1/SWIR2, iron-oxide red/blue, ferrous SWIR1/NIR, ferric red/green, brightness, bare-rock index) and 6 terrain features (elevation, slope, aspect sin/cos, hillshade, roughness).</li>
+      <li><b>Training data</b> — stratified pixel samples from a reference geological map, split into spatial blocks (train / validation / test) to avoid spatial autocorrelation leakage.</li>
+      <li><b>Models</b> — a fully convolutional CNN (9×9 receptive field) benchmarked against Random Forest and SVM.</li>
+      <li><b>Map generation</b> — dense per-pixel classification, majority-filter smoothing, colour-coded GeoTIFF / PNG maps and area statistics.</li>
+      <li><b>Validation</b> — overall accuracy, Cohen's kappa, per-class precision / recall / F1 and confusion matrix against the reference map.</li>
+    </ol>
+  </div>
+  <div class="card">
+    <h2>Lithology classes</h2>
+    {{ legend() }}
+    <h3>Data sources</h3>
+    <ul>
+      <li>Sentinel-2 L2A — <a href="https://dataspace.copernicus.eu">Copernicus Data Space</a></li>
+      <li>Landsat 8/9 C2 L2 and SRTM DEM — <a href="https://earthexplorer.usgs.gov">USGS EarthExplorer</a></li>
+      <li>Reference maps — Geological Survey of Pakistan or other national surveys</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}

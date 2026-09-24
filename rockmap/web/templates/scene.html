@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status, legend %}
+{% block title %}{{ scene.name }}{% endblock %}
+{% block content %}
+{% set f = scene.folder %}
+<div class="row">
+  <div><h1>{{ scene.name }}</h1>
+  <p class="sub">{{ sensors[scene.sensor].name }} · {{ scene.width }}×{{ scene.height }} px · {{ '%g' % scene.pixel_size }} {{ 'm' if scene.crs and 'EPSG:4326' not in scene.crs else 'units' }}/px · {{ scene.crs or 'no CRS' }}</p></div>
+  <span class="spacer"></span>
+  <form class="inline" method="post" action="{{ url_for('delete_scene', scene_id=scene.id) }}" onsubmit="return confirm('Delete this scene and its files?')"><button class="btn small danger">Delete scene</button></form>
+</div>
+
+<div class="grid side">
+  <div class="card">
+    <div class="row"><h2 style="margin: 0">Select region of interest</h2><span class="spacer"></span>
+      <div class="tabs" data-base-for="region-viewer" style="margin: 0">
+        <button type="button" class="active" data-src="{{ url_for('files', relpath=f ~ '/rgb.png') }}">True colour</button>
+        <button type="button" data-src="{{ url_for('files', relpath=f ~ '/falsecolor.png') }}">SWIR false colour</button>
+        {% if scene.has_dem %}<button type="button" data-src="{{ url_for('files', relpath=f ~ '/hillshade.png') }}">DEM hillshade</button>{% endif %}
+        {% if scene.has_reference %}<button type="button" data-src="{{ url_for('files', relpath=f ~ '/reference.png') }}">Reference map</button>{% endif %}
+      </div>
+    </div>
+    <p class="hint" style="margin: 6px 0 10px">Drag on the image to classify only part of the scene, or leave it empty to classify the whole scene.</p>
+    <div class="viewer" id="region-viewer" data-viewer data-width="{{ scene.width }}" data-height="{{ scene.height }}">
+      <img class="base" src="{{ url_for('files', relpath=f ~ '/rgb.png') }}" alt="scene preview">
+      <canvas></canvas>
+    </div>
+    <div class="row" style="margin-top: 8px"><span id="window-label" class="muted">Whole scene</span><span class="spacer"></span><button type="button" class="btn small ghost" id="window-clear">Clear selection</button></div>
+  </div>
+
+  <div class="grid" style="align-content: start">
+    <form class="card" method="post" action="{{ url_for('classify', scene_id=scene.id) }}">
+      <h2>Run classification</h2>
+      <input type="hidden" name="window" id="window-input">
+      {% if models %}
+      <label for="model_id">Model</label>
+      <select name="model_id" id="model_id">
+        {% for m in models %}<option value="{{ m.id }}" {{ 'disabled' if m.uses_dem and not scene.has_dem }}>{{ m.name }}{{ ' (needs DEM)' if m.uses_dem and not scene.has_dem }}</option>{% endfor %}
+      </select>
+      <label for="algorithm">Algorithm</label>
+      <select name="algorithm" id="algorithm">
+        <option value="">Best in model (highest kappa)</option>
+        {% for a, label in algorithm_labels.items() %}<option value="{{ a }}">{{ label }}</option>{% endfor %}
+      </select>
+      <label for="smoothing">Post-processing</label>
+      <select name="smoothing" id="smoothing">
+        <option value="1">None</option><option value="3" selected>Majority filter 3×3</option><option value="5">Majority filter 5×5</option>
+      </select>
+      {% if scene.has_reference %}<p class="hint">The result will be validated against this scene's reference geological map.</p>{% endif %}
+      <p style="margin-top: 16px"><button class="btn">Classify</button></p>
+      {% else %}
+      <p class="empty">No trained model yet.{% if scene.has_reference %} Train one below.{% endif %}</p>
+      {% endif %}
+    </form>
+
+    <form class="card" method="post" action="{{ url_for('train', scene_id=scene.id) }}">
+      <h2>Train models</h2>
+      {% if scene.has_reference %}
+      <label for="name">Model name</label>
+      <input type="text" name="name" id="name" value="Model – {{ scene.name }}">
+      <label>Algorithms</label>
+      {% for a, label in algorithm_labels.items() %}<label class="check"><input type="checkbox" name="algorithms" value="{{ a }}" checked> {{ label }}</label>{% endfor %}
+      {% if scene.has_dem %}<label class="check"><input type="checkbox" name="use_dem" checked> Use DEM terrain features</label>{% endif %}
+      <div class="grid two" style="gap: 10px; grid-template-columns: 1fr 1fr">
+        <div><label for="epochs">CNN epochs</label><input type="number" name="epochs" id="epochs" value="25" min="1" max="200"></div>
+        <div><label for="samples">Samples / class</label><input type="number" name="samples" id="samples" value="3000" min="100" max="50000" step="100"></div>
+      </div>
+      <p class="hint">Pixels are split into spatial blocks: 60 % train, 15 % validation, 25 % test.</p>
+      <p style="margin-top: 16px"><button class="btn">Start training</button></p>
+      {% else %}
+      <p class="empty">Training requires a reference geological map. Upload the scene again with one.</p>
+      {% endif %}
+    </form>
+
+    <div class="card">
+      <h2>Jobs on this scene</h2>
+      {% for j in jobs %}
+        <p style="margin: 6px 0"><a href="{{ url_for('job_page', job_id=j.id) }}">#{{ j.id }} {{ j.kind }}</a> {{ status(j.status) }}
+        {% if j.kind == 'classify' and j.params.window %}<span class="muted">region</span>{% endif %}
+        <span class="muted">· {{ j.created[:16] }}</span></p>
+      {% else %}<p class="empty">No jobs yet.</p>{% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

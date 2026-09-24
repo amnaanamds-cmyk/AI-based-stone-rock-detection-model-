@@ -1,0 +1,38 @@
+{% macro status(s) %}<span class="badge {{ s }}">{{ s }}</span>{% endmacro %}
+
+{% macro legend(present=None) %}
+<ul class="legend">
+  {% for c in rock_classes if present is none or c.id in present %}
+  <li title="{{ c.description }}"><span class="swatch" style="background: {{ c.color }}"></span>{{ c.name }}</li>
+  {% endfor %}
+</ul>
+{% endmacro %}
+
+{% macro metrics_table(m) %}
+<div class="row" style="gap: 28px; margin-bottom: 8px">
+  <div><div class="stat">{{ m.overall_accuracy | pct }}</div><div class="stat-label">Overall accuracy</div></div>
+  <div><div class="stat">{{ '%.3f' % m.kappa }}</div><div class="stat-label">Cohen's kappa</div></div>
+  <div><div class="stat">{{ '%.3f' % m.macro_f1 }}</div><div class="stat-label">Macro F1</div></div>
+  <div><div class="stat">{{ '{:,}'.format(m.n_samples) }}</div><div class="stat-label">Samples</div></div>
+</div>
+<div class="table-wrap"><table>
+  <tr><th>Class</th><th class="num">Precision<br>(user's)</th><th class="num">Recall<br>(producer's)</th><th class="num">F1</th><th class="num">Support</th></tr>
+  {% for c in m.per_class if c.support %}
+  <tr><td><span class="swatch" style="background: {{ class_by_id[c.id].color }}"></span>{{ c.name }}</td>
+      <td class="num">{{ '%.3f' % c.precision }}</td><td class="num">{{ '%.3f' % c.recall }}</td>
+      <td class="num">{{ '%.3f' % c.f1 }}</td><td class="num">{{ c.support }}</td></tr>
+  {% endfor %}
+</table></div>
+{% endmacro %}
+
+{% macro benchmark(algos) %}
+<div class="table-wrap"><table>
+  <tr><th>Algorithm</th><th class="num">Overall accuracy</th><th class="num">Kappa</th><th class="num">Macro F1</th><th class="num">Training time</th></tr>
+  {% for a, m in algos.items() %}
+  {% set t = m.test_metrics %}
+  <tr><td><b>{{ m.label }}</b> <span class="muted mono">{{ a }}</span></td>
+      <td class="num">{{ t.overall_accuracy | pct(2) }}</td><td class="num">{{ '%.3f' % t.kappa }}</td>
+      <td class="num">{{ '%.3f' % t.macro_f1 }}</td><td class="num">{{ '%.1f' % m.train_seconds }} s</td></tr>
+  {% endfor %}
+</table></div>
+{% endmacro %}
