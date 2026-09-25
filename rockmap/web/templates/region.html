@@ -139,8 +139,8 @@
     {% endif %}
 
     <div class="card">
-      <div class="row"><h2 style="margin: 0">Area statistics</h2><span class="spacer"></span>{% if stats %}<a class="btn small ghost" href="{{ url_for('regions.region_stats_csv', region_id=row.id) }}">CSV</a>{% endif %}</div>
-      {% if stats %}
+      <div class="row"><h2 style="margin: 0">Area statistics</h2><span class="spacer"></span>{% if stats and stats.classified_km2 %}<a class="btn small ghost" href="{{ url_for('regions.region_stats_csv', region_id=row.id) }}">CSV</a>{% endif %}</div>
+      {% if stats and stats.classified_km2 %}
       <table style="margin-top: 8px">
         <tr><th>Class</th><th class="num">km²</th><th class="num">% rock</th></tr>
         {% for s in stats.region if s.pixels %}
@@ -152,7 +152,7 @@
           <table>{% for s in d.stats if s.pixels %}<tr><td><span class="swatch" style="background: {{ s.color }}"></span>{{ s.name }}</td><td class="num">{{ '{:,.1f}'.format(s.area_km2) }}</td></tr>{% endfor %}</table>
         </details>
       {% endfor %}
-      {% else %}<p class="empty">Build products to compute statistics.</p>{% endif %}
+      {% else %}<p class="empty">Classify the region, then build products to compute statistics.</p>{% endif %}
     </div>
 
     <div class="card">

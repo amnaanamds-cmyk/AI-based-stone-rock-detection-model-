@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rockmap"
-version = "1.0.0"
+version = "2.0.0"
 description = "AI-Based Satellite Rock/Stone Detection and Geological Mapping System"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -19,6 +19,7 @@ dependencies = [
   "pillow>=10.0",
   "matplotlib>=3.7",
   "joblib>=1.3",
+  "waitress>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -32,7 +33,7 @@ rockmap = "rockmap.cli:main"
 include = ["rockmap*"]
 
 [tool.setuptools.package-data]
-rockmap = ["web/templates/*.html", "web/static/*"]
+rockmap = ["web/templates/*.html", "web/static/*", "web/static/vendor/leaflet/*", "web/static/vendor/leaflet/images/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

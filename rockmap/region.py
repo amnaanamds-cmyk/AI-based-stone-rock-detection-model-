@@ -399,7 +399,7 @@ class Region:
         acquired = [k for k in self.tile_keys if st.get(k, {}).get("acquired")]
         classified = [k for k in self.tile_keys if st.get(k, {}).get("classified")]
         products = {"rgb": (3, acquired), "falsecolor": (3, acquired), "hillshade": (1, acquired),
-                    "lithology": (1, classified), "confidence": (1, classified)}
+                    "surface": (1, acquired), "lithology": (1, classified), "confidence": (1, classified)}
         paths = {}
         for pi, (name, (count, keys)) in enumerate(products.items()):
             if not keys:
@@ -414,11 +414,11 @@ class Region:
                 for i, k in enumerate(keys):
                     progress((pi + i / len(keys)) / len(products), f"Mosaicking {name}: tile {k}")
                     dst.write(self._render_tile(k, name), window=self.tile(k).window)
-                if name == "lithology":
+                if name in ("lithology", "surface"):
                     dst.write_colormap(1, class_colormap())
                 factors = [f for f in (2, 4, 8, 16, 32, 64) if max(self.width, self.height) / f >= 256]
                 if factors:
-                    rs = Resampling.nearest if name == "lithology" else Resampling.average
+                    rs = Resampling.nearest if name in ("lithology", "surface") else Resampling.average
                     dst.build_overviews(factors, rs)
                     dst.update_tags(ns="rio_overview", resampling=rs.name)
             paths[name] = path
@@ -428,6 +428,14 @@ class Region:
 
     def _render_tile(self, key: str, name: str) -> np.ndarray:
         d = self.tile_dir(key)
+        if name == "surface":
+            # snow / water / vegetation / shadow straight from the imagery (no model needed); 1 = bare ground
+            t = self.tile(key)
+            scene = load_sources(self._sources(key), t.window)
+            out = np.where(scene.landcover > 0, scene.landcover, 1).astype(np.uint8)
+            out[~scene.valid] = CLOUD_CLASS
+            out[~self.aoi_mask(t.info)] = 0
+            return out[None]
         if name in ("lithology", "confidence"):
             with rasterio.open(d / ("classified.tif" if name == "lithology" else "confidence.tif")) as src:
                 a = src.read(1)

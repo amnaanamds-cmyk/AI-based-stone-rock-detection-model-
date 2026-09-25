@@ -1,2 +1,2 @@
 """RockMap - AI-Based Satellite Rock/Stone Detection and Geological Mapping System."""
-__version__ = "1.0.0"
+__version__ = "2.0.0"

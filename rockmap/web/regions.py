@@ -20,7 +20,7 @@ from .db import Database
 from .jobs import handler
 
 bp = Blueprint("regions", __name__)
-LAYERS = ("rgb", "falsecolor", "hillshade", "lithology", "confidence")
+LAYERS = ("rgb", "falsecolor", "hillshade", "surface", "lithology", "confidence")
 
 
 def _db() -> Database:

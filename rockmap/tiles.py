@@ -70,7 +70,7 @@ def _pick_level(path: Path, tile_px_m: float) -> int:
 
 def render_tile(mosaic: Path, layer: str, z: int, x: int, y: int) -> bytes:
     """PNG bytes of one XYZ tile of a region mosaic (transparent outside data)."""
-    categorical = layer == "lithology"
+    categorical = layer in ("lithology", "surface")
     rs = Resampling.nearest if categorical else Resampling.bilinear
     left, bottom, right, top = tile_bounds(z, x, y)
     full, _ = _open(mosaic, -1)
@@ -88,6 +88,8 @@ def render_tile(mosaic: Path, layer: str, z: int, x: int, y: int) -> bytes:
     if categorical:
         rgba = colorize(data[0])
         rgba[data[0] == 0] = 0
+        if layer == "surface":
+            rgba[data[0] == 1] = 0   # bare rock / soil: transparent so the imagery shows through
     elif layer == "confidence":
         c = data[0].astype(np.float32)
         # low confidence -> red, high -> green

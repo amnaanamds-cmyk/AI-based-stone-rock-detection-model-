@@ -1,5 +1,13 @@
 # RockMap user manual
 
+> For region-scale mapping (for example all of Gilgit-Baltistan), see **[GILGIT_BALTISTAN.md](GILGIT_BALTISTAN.md)**. Server setup, users and the REST API are covered in **[DEPLOYMENT.md](DEPLOYMENT.md)**. This manual covers installation, the single-scene workflow and the command line.
+
+## 0. Signing in
+The first start creates the user `admin`. Its password is printed in the console and saved in `data/initial_admin_password.txt`, unless `ROCKMAP_ADMIN_PASSWORD` was set. Administrators add other users under **Admin ▸ Users**. Roles:
+* **viewer** can view maps and download products.
+* **analyst** can also upload data, draw training areas and run jobs.
+* **admin** can also manage users and delete data.
+
 ## 1. Installation
 1. Install Python 3.9 or newer.
 2. Create a virtual environment: `python -m venv .venv`, then activate it (`source .venv/bin/activate` on Linux/macOS, `.venv\Scripts\activate` on Windows).
@@ -68,7 +76,11 @@ Start the server with `rockmap serve` and open http://127.0.0.1:5000.
 | `rockmap train` | Trains the CNN, RF and SVM and writes a model folder with metrics |
 | `rockmap classify` | Classifies a scene or a region of it (`--window COL ROW W H`), optionally with `--reference` for validation |
 | `rockmap evaluate --pred MAP --ref REF` | Validates any classified map against a reference map |
-| `rockmap serve` | Starts the dashboard |
+| `rockmap serve` | Starts the dashboard (production server; `--debug` for development) |
+| `rockmap worker` | Runs background jobs in a separate process |
+| `rockmap create-user NAME --role analyst` | Creates a dashboard user |
+| `rockmap presets` | Lists the ready-made Gilgit-Baltistan areas |
+| `rockmap region create/acquire/train/classify/mosaic/stats/export/report/query/status` | Region-scale processing (see GILGIT_BALTISTAN.md) |
 
 Important options:
 * `--sensor sentinel2 | sentinel2_legacy | landsat89 | reflectance` sets how DN values are scaled.

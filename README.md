@@ -1,126 +1,97 @@
 # RockMap: AI-Based Satellite Rock/Stone Detection and Geological Mapping System
 
-This is the Final Year Project of the Department of Computer Science, Government Degree College Zaim, Charsadda (affiliated with Bacha Khan University Charsadda). It was built by **Aleena (Roll No 40)** and **Amna (Roll No 39)** in Semester 7.
+RockMap is a geological mapping platform that maps **surface rock types across whole regions such as Gilgit-Baltistan**. Everything runs from a web dashboard:
 
-RockMap takes free multispectral satellite imagery (Sentinel-2 or Landsat 8/9) and an SRTM elevation model. It classifies the surface into broad **rock and lithology types** with a **Convolutional Neural Network (CNN)**, and compares the CNN against **Random Forest** and **SVM**. It checks the map against a reference geological map and shows the result as an interactive geological map in a **web dashboard**.
+1. It downloads cloud-free **Sentinel-2** imagery and the **Copernicus 30 m DEM** automatically.
+2. It masks out snow, glaciers, water, vegetation and terrain shadow.
+3. It classifies the remaining surface into lithology classes with a **CNN**, benchmarked against Random Forest and SVM.
+4. It publishes seamless maps, statistics per district, GIS files and PDF reports.
 
-![pipeline](docs/images/pipeline_strip.jpg)
-*Left to right: true-colour image, SWIR false-colour image, reference geological map, CNN-classified lithology map (synthetic demo study area).*
+Final Year Project, Department of Computer Science, Government Degree College Zaim, Charsadda (Bacha Khan University Charsadda). Authors: **Aleena (Roll No 40)** and **Amna (Roll No 39)**.
 
-## Features
+![region map](docs/images/region_gilgit.jpg)
+*Gilgit city region: a real cloud-free Sentinel-2 composite built automatically by RockMap, shown on the region map with its processing tiles.*
 
-| Proposal objective | Where it is implemented |
+## What it does
+
+| Capability | Details |
 |---|---|
-| Acquire and preprocess Sentinel-2 / Landsat imagery and DEM | `rockmap/preprocessing.py`: converts DN values to reflectance, applies dark-object-subtraction atmospheric correction, and masks clouds (Sentinel-2 SCL, Landsat QA_PIXEL, or the Haze Optimized Transform). It also stacks bands and reprojects the DEM onto the scene grid. |
-| Feature extraction: band ratios, indices, terrain | `rockmap/features.py` produces 19 features: 6 bands, 7 spectral indices (NDVI, clay, iron-oxide, ferrous, ferric, brightness, bare-rock) and 6 DEM features (elevation, slope, aspect sin/cos, hillshade, roughness). |
-| Training data from existing geological maps | `rockmap/reference.py` turns GeoJSON or shapefile maps into label rasters. `rockmap/sampling.py` draws stratified samples and splits them into spatial blocks for training, validation and testing. |
-| CNN deep-learning model, benchmarked against RF / SVM | `rockmap/models/cnn.py` is a fully convolutional PyTorch CNN. `rockmap/models/classical.py` holds the scikit-learn RF and SVM. |
-| Classified, colour-coded rock-type map | `rockmap/pipeline.py` and `rockmap/mapping.py` produce the map as GeoTIFF and PNG, plus a confidence map, a majority filter and area statistics in km². |
-| Validation against reference maps | `rockmap/evaluation.py` reports overall accuracy, Cohen's kappa, per-class precision, recall and F1, a confusion matrix and an agreement map. |
-| Web dashboard: select region, classify, view map | `rockmap/web/`: a Flask app with a SQLite database and background jobs. You can upload scenes, train models, draw a region to classify, and view the map with an opacity slider or on a Leaflet web map. |
-| Generalised to any region | Nothing is hard-coded to one location. Any scene with the six canonical bands works, and a reference map is only needed for training and validation. |
+| **Region-scale mapping** | Define an area (all of Gilgit-Baltistan, a preset valley, a rectangle you draw, or an uploaded boundary). It is cut into 20 km tiles and processed tile by tile. Every stage can be resumed, so an interrupted job continues where it stopped. |
+| **Automatic data acquisition** | Sentinel-2 L2A cloud-optimised GeoTIFFs and the Copernicus DEM are read from AWS Open Data, with no account or key needed. For each tile, a median composite of the least-cloudy late-summer scenes is built. Clouds and shadows are removed using the SCL layer, and steep slopes get topographic C-correction. |
+| **Mountain-aware masking** | Snow/glacier, water, dense vegetation and deep shadow are mapped as separate classes, so they are never mistaken for rock. |
+| **AI classification** | A fully convolutional CNN (PyTorch) is trained alongside Random Forest and SVM baselines. Train, validation and test sets are split by spatial blocks. The system reports accuracy, kappa, F1 and a confusion matrix for each model. |
+| **Training data** | Upload digitised geological maps (GeoJSON plus a table mapping map units to classes), or **draw training areas on the map** in the dashboard. |
+| **Products** | A seamless web map with a built-in tile server, GeoTIFF mosaics with overviews (open in QGIS/ArcGIS), GeoJSON polygons, area statistics per class and per district (CSV), a multi-page PDF report, and point queries (rock type, confidence, elevation). |
+| **Platform** | User accounts with roles (admin / analyst / viewer), CSRF protection, login lock-out, audit log, personal API tokens and a REST API. Background jobs are persistent, with progress, logs and cancel. Jobs can run in a separate worker process. Production serving uses waitress, and there is a Docker Compose setup. Leaflet is bundled, so the map works offline. |
+| **Single-scene mode** | Upload any Sentinel-2 or Landsat GeoTIFF, train on it and classify it. Large scenes are processed in blocks. |
 
-## Installation
-
-Python 3.9 or newer is required.
+## Quick start
 
 ```bash
-git clone <this repository> && cd AI-based-stone-rock-detection-model-
-python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
-# CPU-only PyTorch (smaller download); skip this line to get the default build
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+python -m venv .venv && source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install torch --index-url https://download.pytorch.org/whl/cpu   # CPU build (smaller)
 pip install -e ".[dev]"
+rockmap serve                  # http://127.0.0.1:5000
 ```
 
-## Quick start (no data download needed)
+On first start, RockMap creates the user **admin**. Its password is printed in the console and saved in `data/initial_admin_password.txt`. Change it under *Profile* after signing in. You can also set `ROCKMAP_ADMIN_PASSWORD` before the first start.
 
+### Mapping Gilgit-Baltistan (dashboard)
+1. **Regions → New region**: start with a preset such as *Gilgit city*, *Hunza*, *Skardu* or *Astore*, or choose *Gilgit-Baltistan (whole region)*, which is about 190 tiles.
+2. **Acquire imagery & DEM**: tiles fill in on the map as they finish, at about 30–60 s per tile. Tick *only tiles visible on the map* to process just the area you are looking at.
+3. **Training data**: upload your digitised geological map as GeoJSON, with a unit → class table (see `examples/gb_geology_mapping.json`). You can also draw training areas where you are certain of the rock type, for example from field visits.
+4. **Train model**, then **Classify**, then **Build products**. Upload district boundaries first if you want statistics per district.
+5. Explore the map: click anywhere for rock type, confidence and elevation. Then download the GeoTIFFs, GeoJSON, CSV or PDF.
+
+The same workflow from the command line:
 ```bash
-rockmap demo          # synthetic study area -> train CNN, RF, SVM -> classify -> validate (~2 min on CPU)
-rockmap serve         # open http://127.0.0.1:5000
+rockmap region create --preset gilgit-baltistan --out regions/gb
+rockmap region acquire regions/gb                          # resumable; --tiles 004_002 ... for a subset
+rockmap region train regions/gb --reference geology.geojson --field UNIT \
+        --mapping examples/gb_geology_mapping.json --out models/gb
+rockmap region classify regions/gb --model models/gb
+rockmap region mosaic regions/gb
+rockmap region stats regions/gb --districts gb_districts.geojson --json stats.json
+rockmap region export regions/gb --out gb_lithology.geojson
+rockmap region report regions/gb --out gb_report.pdf
+rockmap region query regions/gb --lon 74.31 --lat 35.92
 ```
 
-In the dashboard, click **+ Synthetic study area**, then **Start training**. After training, drag a rectangle on the image and click **Classify**.
+### Try it without real data
+`rockmap demo` builds a synthetic study area, trains all three models, then classifies and validates it (about 2 min on a CPU). In the dashboard, the equivalent is *Dashboard → + Synthetic study area*.
 
-Demo results (512×512 synthetic scene, 20 m pixels, 19 features, 3,000 samples per class, measured on held-out spatial test blocks):
+## Important: accuracy depends on your training data
 
-| Algorithm | Overall accuracy | Kappa | Macro F1 | Full-map agreement with reference | Training time (4-core CPU) |
-|---|---|---|---|---|---|
-| **CNN** | **98.1 %** | **0.977** | **0.981** | **98.5 %** | 75 s |
-| Random Forest | 92.0 % | 0.906 | 0.918 | 96.9 % | 4 s |
-| SVM | 93.1 % | 0.919 | 0.930 | 97.5 % | 0.2 s |
+The software is complete, but no machine can know the geology of Gilgit-Baltistan without examples. **A model is only as good as the reference data it is trained on.** Before trusting a map:
+* Train on a digitised published geological map, such as Searle & Khan (1996) *Geological Map of North Pakistan* or Geological Survey of Pakistan sheets, and/or on training areas checked in the field.
+* Check the accuracy report. The test set is held out by spatial blocks, so the numbers are honest.
+* Treat results as a reconnaissance map. Verify in the field before mining, engineering or legal use.
 
-These numbers come from a *synthetic* scene, so they show that the pipeline works. They are not a claim about real-world accuracy. Real imagery and generalised published maps will give lower figures, and the project report should quote the numbers from the real study area.
+The built-in Gilgit-Baltistan outline is an **approximate** processing extent (about 72,150 km² against the official 72,971 km²). For administrative work, upload an official boundary.
 
-## Working with real data
+## Documentation
+* [docs/GILGIT_BALTISTAN.md](docs/GILGIT_BALTISTAN.md): step-by-step guide for mapping GB, data volumes and timings
+* [docs/USER_MANUAL.md](docs/USER_MANUAL.md): dashboard and command-line manual
+* [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): server installation, Docker, HTTPS, backups, users, REST API
+* [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): system design and methodology (for the project report)
 
-```bash
-# 1. Stack the six bands (B02 B03 B04 B08 B11 B12) of an unzipped Sentinel-2 L2A product at 20 m,
-#    appending the SCL cloud layer
-rockmap stack --safe S2B_MSIL2A_20260314T054639_....SAFE --resolution 20 --scl --out data/kohat/scene.tif
-#    (Landsat 8/9: rockmap stack --bands SR_B2.TIF SR_B3.TIF SR_B4.TIF SR_B5.TIF SR_B6.TIF SR_B7.TIF --qa QA_PIXEL.TIF --out ...)
+## Lithology and surface classes
 
-# 2. Reference geological map: polygons -> label raster on the scene grid
-#    mapping.json: {"Kohat Limestone": 1, "Murree Formation": 2, "Alluvium": 7, ...}
-rockmap rasterize-map --vector geology.geojson --field UNIT --mapping mapping.json \
-                      --scene data/kohat/scene.tif --out data/kohat/reference.tif
-
-# 3. Train and benchmark (the DEM may be in any projection; it is reprojected automatically)
-rockmap train --scene data/kohat/scene.tif --dem srtm.tif --labels data/kohat/reference.tif \
-              --sensor sentinel2 --out runs/kohat --epochs 30
-
-# 4. Classify the same or a different scene / region, and validate
-rockmap classify --model runs/kohat --scene data/kohat/scene.tif --dem srtm.tif \
-                 --reference data/kohat/reference.tif --out outputs/kohat_cnn --algorithm cnn
-```
-
-Every command also runs as `python -m rockmap <command>`, and `rockmap <command> -h` lists all options. See [docs/USER_MANUAL.md](docs/USER_MANUAL.md) for the full manual, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the system design and methodology.
-
-## Lithology classes
-
-| Id | Class | Main spectral / terrain clues |
-|---|---|---|
-| 1 | Limestone / Carbonate | Bright; CO₃ absorption lowers SWIR2 (high SWIR1/SWIR2) |
-| 2 | Sandstone | Iron staining gives a high red/blue ratio |
-| 3 | Shale / Mudstone | Clay Al-OH absorption; soft rock, so low relief |
-| 4 | Granite / Felsic Igneous | Moderately bright, flat spectrum; resistant, so high relief |
-| 5 | Basalt / Mafic Igneous | Very dark (low albedo) |
-| 6 | Metamorphic (Schist / Gneiss) | Intermediate albedo, strong texture from foliation |
-| 7 | Alluvium / Quaternary Deposits | Valley floors, low slope, partly vegetated |
-
-To change the classes, edit `rockmap/config.py`.
-
-## Dashboard
-
-![dashboard](docs/images/dashboard_result.jpg)
+| Id | Class | Id | Surface mask |
+|---|---|---|---|
+| 1 | Limestone / Carbonate (incl. marble) | 250 | Snow / Glacier / Ice |
+| 2 | Sandstone (incl. quartzite) | 251 | Water |
+| 3 | Shale / Mudstone (incl. slate) | 252 | Dense vegetation |
+| 4 | Granite / Felsic Igneous (Karakoram & Kohistan batholiths) | 253 | Terrain shadow |
+| 5 | Basalt / Mafic Igneous (Chilas gabbro, Kohistan arc, ophiolites) | 255 | Cloud / no data |
+| 6 | Metamorphic (gneiss, schist; Nanga Parbat, Karakoram metamorphics) | | |
+| 7 | Alluvium / Quaternary deposits (river terraces, moraine, scree) | | |
 
 ## Tests
-
 ```bash
-pytest            # 30 tests: preprocessing, features, sampling, metrics, training, inference, CLI and web app
+pytest                                  # 50 tests (web platform, region engine, acquisition logic, ML pipeline)
+ROCKMAP_NETWORK_TESTS=1 pytest          # plus a live download of Sentinel-2 + DEM near Gilgit
 ```
 
-## Project layout
-
-```
-rockmap/
-  config.py          classes, sensor presets, defaults
-  io.py              GeoTIFF read/write, reprojection
-  preprocessing.py   reflectance, DOS, cloud masks, band stacking
-  features.py        spectral indices, terrain features, normaliser
-  synthetic.py       synthetic study-area generator (demo / tests)
-  reference.py       vector geological map -> label raster
-  sampling.py        stratified sampling, spatial block split, patches
-  models/cnn.py      CNN (PyTorch)
-  models/classical.py Random Forest, SVM (scikit-learn)
-  evaluation.py      accuracy, kappa, F1, confusion matrix
-  mapping.py         map rendering, majority filter, statistics, figures
-  pipeline.py        train_models(), classify_scene(), ModelBundle
-  cli.py             command-line interface
-  web/               Flask dashboard (app.py, db.py, templates/, static/)
-tests/               pytest suite
-docs/                user manual, architecture & methodology, figures
-```
-
-## References
-
-See the project proposal. Key sources: Bujak et al. (2021), Sentinel-2 + DEM + Random Forest lithological mapping; Grebby et al. (2011), classifier comparison; Harris et al. (2016), supervised ML for rock types; Zhang et al. (2002), Haze Optimized Transform; USGS EarthExplorer; Copernicus Data Space.
+## Data credits
+Contains modified Copernicus Sentinel data and Copernicus DEM (ESA / European Union), accessed through the AWS Open Data Registry (Element 84 `sentinel-cogs`, `copernicus-dem-30m`). Map display uses Leaflet (BSD-2), with optional OpenStreetMap and Esri basemaps when online.

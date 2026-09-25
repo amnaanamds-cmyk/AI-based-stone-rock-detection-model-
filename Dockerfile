@@ -1,9 +1,10 @@
 FROM python:3.11-slim
 WORKDIR /app
-COPY . .
+COPY pyproject.toml README.md ./
+COPY rockmap ./rockmap
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
  && pip install --no-cache-dir -e .
-ENV ROCKMAP_DATA_DIR=/data
+ENV ROCKMAP_DATA_DIR=/data PYTHONUNBUFFERED=1
 VOLUME /data
 EXPOSE 5000
 CMD ["rockmap", "serve", "--host", "0.0.0.0", "--port", "5000"]

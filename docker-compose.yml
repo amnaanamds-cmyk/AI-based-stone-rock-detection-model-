@@ -1,0 +1,29 @@
+# Production deployment: web server + separate background worker sharing one data volume.
+#   docker compose up -d
+#   docker compose logs web | grep "First start"      # initial admin password (if not set below)
+services:
+  web:
+    build: .
+    image: rockmap:latest
+    command: ["rockmap", "serve", "--host", "0.0.0.0", "--port", "5000", "--workers", "0"]
+    ports: ["5000:5000"]
+    volumes: ["rockmap-data:/data"]
+    environment:
+      ROCKMAP_DATA_DIR: /data
+      ROCKMAP_ORGANISATION: "Government Degree College Zaim, Charsadda"
+      # ROCKMAP_ADMIN_PASSWORD: change-me-now      # otherwise a random one is printed in the log
+      # ROCKMAP_SECURE_COOKIES: "1"                # when served over HTTPS
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/healthz')"]
+      interval: 30s
+  worker:
+    image: rockmap:latest
+    depends_on: [web]
+    command: ["rockmap", "worker", "--threads", "1"]
+    volumes: ["rockmap-data:/data"]
+    environment:
+      ROCKMAP_DATA_DIR: /data
+    restart: unless-stopped
+volumes:
+  rockmap-data:

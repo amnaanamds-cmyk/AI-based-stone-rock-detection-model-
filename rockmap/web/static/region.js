@@ -4,6 +4,11 @@
   var el = document.getElementById("region-map");
   if (!el || !window.L) return;
   var csrf = document.querySelector('meta[name="csrf-token"]').content;
+  var esc = function (v) {
+    return String(v === undefined || v === null ? "" : v).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  };
   var canEdit = el.dataset.canEdit === "1";
   var classes = JSON.parse(el.dataset.classes);
   var colorOf = {}; classes.forEach(function (c) { colorOf[c.id] = c.color; });
@@ -11,6 +16,7 @@
   var available = JSON.parse(el.dataset.layers);
 
   var map = L.map(el, { preferCanvas: true, zoomControl: true });
+  window.rockmapMap = map;
   var bases = {
     "OpenStreetMap": L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
       { maxZoom: 18, attribution: "&copy; OpenStreetMap contributors" }),
@@ -31,6 +37,10 @@
     lith = L.tileLayer(tileUrl("lithology"), { maxZoom: 17, maxNativeZoom: 16, opacity: 0.8 }).addTo(map);
     overlays["Lithology map"] = lith;
   }
+  if (available.indexOf("surface") >= 0) {
+    overlays["Surface cover (snow, water, vegetation, shadow)"] = L.tileLayer(tileUrl("surface"), { maxZoom: 17, maxNativeZoom: 16, opacity: 0.85 });
+    if (!lith) overlays["Surface cover (snow, water, vegetation, shadow)"].addTo(map);
+  }
   if (available.indexOf("confidence") >= 0) overlays["Confidence"] = L.tileLayer(tileUrl("confidence"), { maxZoom: 17, maxNativeZoom: 16, opacity: 0.7 });
 
   var statusColor = function (p) { return p.error ? "#c62828" : p.classified ? "#2e7d32" : p.acquired ? "#e0a458" : "#9aa0a6"; };
@@ -38,8 +48,8 @@
     style: function (f) { return { color: statusColor(f.properties), weight: 1, fillOpacity: lith ? 0 : 0.12 }; },
     onEachFeature: function (f, layer) {
       var p = f.properties;
-      layer.bindTooltip("Tile " + p.key + (p.acquired ? " · " + (p.scenes || 0) + " scenes, " + Math.round((p.clear || 0) * 100) + "% clear" : " · pending") +
-        (p.classified ? " · classified" : "") + (p.error ? " · " + p.error : ""), { sticky: true });
+      layer.bindTooltip(esc("Tile " + p.key + (p.acquired ? " · " + (p.scenes || 0) + " scenes, " + Math.round((p.clear || 0) * 100) + "% clear" : " · pending") +
+        (p.classified ? " · classified" : "") + (p.error ? " · " + p.error : "")), { sticky: true });
     }
   }).addTo(map);
   overlays["Processing tiles"] = grid;
@@ -49,9 +59,9 @@
     style: function (f) { return { color: "#111", weight: 1.5, fillColor: f.properties.color, fillOpacity: 0.55 }; },
     onEachFeature: function (f, layer) {
       var p = f.properties;
-      var html = "<b>Training area</b><br><span class='swatch' style='background:" + p.color + "'></span>" + p["class"] +
-        "<br><span class='muted'>" + (p.author || "") + " · " + (p.created || "") + "</span>";
-      if (canEdit) html += "<br><button class='btn small danger' data-del='" + p.id + "'>Delete</button>";
+      var html = "<b>Training area</b><br><span class='swatch' style='background:" + esc(p.color) + "'></span>" + esc(p["class"]) +
+        "<br><span class='muted'>" + esc(p.author) + " · " + esc(p.created) + "</span>";
+      if (canEdit) html += "<br><button class='btn small danger' data-del='" + (+p.id) + "'>Delete</button>";
       layer.bindPopup(html);
     }
   }).addTo(map);
@@ -82,11 +92,11 @@
       var html = "<b>" + e.latlng.lat.toFixed(5) + "°N, " + e.latlng.lng.toFixed(5) + "°E</b><br>";
       if (!q.inside) html += "<span class='muted'>outside the region</span>";
       else {
-        if (q.class_name !== undefined) html += (q.color ? "<span class='swatch' style='background:" + q.color + "'></span>" : "") + q.class_name +
-          (q.confidence ? " <span class='muted'>(" + q.confidence + "% confidence)</span>" : "") + "<br>";
+        if (q.class_name !== undefined) html += (q.color ? "<span class='swatch' style='background:" + esc(q.color) + "'></span>" : "") + esc(q.class_name) +
+          (q.confidence ? " <span class='muted'>(" + (+q.confidence) + "% confidence)</span>" : "") + "<br>";
         else html += "<span class='muted'>not classified yet</span><br>";
         if (q.elevation_m !== undefined) html += "Elevation: " + Math.round(q.elevation_m) + " m<br>";
-        html += "<span class='muted'>tile " + q.tile + "</span>";
+        html += "<span class='muted'>tile " + esc(q.tile) + "</span>";
       }
       L.popup().setLatLng(e.latlng).setContent(html).openOn(map);
     });

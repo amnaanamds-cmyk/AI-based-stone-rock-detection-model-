@@ -3,16 +3,18 @@
 {% block title %}About{% endblock %}
 {% block content %}
 <h1>About RockMap</h1>
-<p class="sub">AI-Based Satellite Rock/Stone Detection and Geological Mapping System — Final Year Project, Department of Computer Science, Government Degree College Zaim, Charsadda (Bacha Khan University Charsadda). By Aleena (Roll No 40) and Amna (Roll No 39).</p>
+<p class="sub">RockMap v{{ version }} — AI-Based Satellite Rock/Stone Detection and Geological Mapping System — Final Year Project, Department of Computer Science, Government Degree College Zaim, Charsadda (Bacha Khan University Charsadda). By Aleena (Roll No 40) and Amna (Roll No 39).</p>
 <div class="grid two">
   <div class="card">
     <h2>Processing pipeline</h2>
     <ol>
-      <li><b>Pre-processing</b> — DN → surface reflectance, optional dark-object subtraction, cloud / shadow masking (SCL, QA_PIXEL or Haze Optimized Transform), band stacking and DEM co-registration.</li>
+      <li><b>Acquisition</b> — Sentinel-2 L2A scenes and the Copernicus 30 m DEM are read directly from AWS Open Data; the least-cloudy late-summer scenes of every 20 km tile are merged into a cloud-free median composite.</li>
+      <li><b>Pre-processing</b> — DN → surface reflectance, cloud / shadow masking (SCL, QA_PIXEL or Haze Optimized Transform), topographic C-correction for steep slopes, band stacking and DEM co-registration.</li>
+      <li><b>Surface masks</b> — snow / glacier, water, dense vegetation and deep terrain shadow are mapped as separate classes so they are never mistaken for rock.</li>
       <li><b>Feature extraction</b> — 6 reflectance bands, 7 spectral indices (NDVI, clay SWIR1/SWIR2, iron-oxide red/blue, ferrous SWIR1/NIR, ferric red/green, brightness, bare-rock index) and 6 terrain features (elevation, slope, aspect sin/cos, hillshade, roughness).</li>
       <li><b>Training data</b> — stratified pixel samples from a reference geological map, split into spatial blocks (train / validation / test) to avoid spatial autocorrelation leakage.</li>
       <li><b>Models</b> — a fully convolutional CNN (9×9 receptive field) benchmarked against Random Forest and SVM.</li>
-      <li><b>Map generation</b> — dense per-pixel classification, majority-filter smoothing, colour-coded GeoTIFF / PNG maps and area statistics.</li>
+      <li><b>Map generation</b> — seamless tile-by-tile classification, majority-filter smoothing, region-wide GeoTIFF mosaics, web map tiles, GeoJSON polygons, district statistics and PDF reports.</li>
       <li><b>Validation</b> — overall accuracy, Cohen's kappa, per-class precision / recall / F1 and confusion matrix against the reference map.</li>
     </ol>
   </div>

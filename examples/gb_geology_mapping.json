@@ -1,0 +1,20 @@
+{
+  "_comment": "TEMPLATE ONLY - map the unit names used in YOUR digitised geological map legend (e.g. Searle & Khan 1996, Geological Map of North Pakistan; GSP sheets) to RockMap classes. Verify every entry with a geologist. Keys starting with _ are ignored.",
+  "Karakoram Batholith": 4,
+  "Hunza Plutonic Unit": 4,
+  "Baltoro Granite": 4,
+  "Kohistan Batholith": 4,
+  "Chilas Complex": 5,
+  "Jijal Complex": 5,
+  "Kamila Amphibolites": 5,
+  "Chalt Volcanics": 5,
+  "Ophiolitic melange": 5,
+  "Nanga Parbat Gneiss": 6,
+  "Karakoram Metamorphic Complex": 6,
+  "Yasin Group": 3,
+  "Slate and phyllite": 3,
+  "Limestone and marble": 1,
+  "Sandstone and quartzite": 2,
+  "Quaternary alluvium": 7,
+  "Moraine and glacial deposits": 7
+}

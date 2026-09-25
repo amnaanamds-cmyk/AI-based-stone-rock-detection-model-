@@ -3,34 +3,66 @@
 ## 1. Architecture
 
 ```
-            ┌──────────────────────── Web dashboard (Flask) ────────────────────────┐
- Browser ◄──┤ pages: dashboard · upload · scene (region select) · job · models      │
- (HTML/CSS/ │ JSON API: /api/jobs/<id> · /api/scenes · /api/models · /api/classes    │
-  JS,       │ background job runner (1 worker thread) ── progress ──► SQLite DB     │
-  Leaflet)  └───────────────┬───────────────────────────────────────────────────────┘
-                            │ calls
- CLI (rockmap …) ───────────┤
-                            ▼
-      ┌──────────────────── Processing core (rockmap package) ────────────────────┐
-      │ io → preprocessing → features → sampling → models (CNN / RF / SVM)        │
-      │                                   → pipeline → mapping / evaluation       │
-      └───────────────────────────────────────────────────────────────────────────┘
-                            │ reads / writes
-      data/ ── scenes/<id>/ scene.tif dem.tif reference.tif cloud.tif *.png
-            ── models/job<id>/ meta.json cnn.pt rf.joblib svm.joblib cm_*.png
-            ── jobs/<id>/ classified.tif confidence.tif *.png result.json
-            ── rockmap.db
+ Browser (HTML/JS, bundled Leaflet)          Scripts / QGIS / other systems
+        │ session cookie + CSRF                      │ Bearer API token
+        ▼                                            ▼
+ ┌──────────────── Web platform (Flask + waitress) ────────────────────────────┐
+ │ auth (roles, lock-out, audit) · scenes · regions · models · jobs · admin    │
+ │ REST API · XYZ tile server (region mosaics → Web Mercator PNG, disk cache)  │
+ └───────────────┬───────────────────────────────┬────────────────────────────┘
+                 │ enqueue                        │ read
+                 ▼                                ▼
+        SQLite (WAL): users, scenes, regions, models, jobs, annotations, audit
+                 ▲ claim / progress / heartbeat
+ ┌───────────────┴──────── Workers (threads in the server or `rockmap worker`) ┐
+ │ scene jobs: train · classify          region jobs: acquire · train ·        │
+ │                                        classify · products · pipeline       │
+ └───────────────┬─────────────────────────────────────────────────────────────┘
+                 ▼
+ ┌──────────────────────── Processing core (rockmap package) ─────────────────┐
+ │ acquisition: STAC / S3 search by MGRS, COG window reads, composites, DEM    │
+ │ region: UTM tile grid, resumable stages, VRT halo reads, mosaics, stats,    │
+ │         GeoJSON export, point query          report: PDF                    │
+ │ pipeline: preprocessing → masks → features → CNN / RF / SVM → blocks        │
+ └────────────────────────────────────────────────────────────────────────────┘
+        ▲ HTTPS range requests
+ AWS Open Data: sentinel-cogs (Sentinel-2 L2A COG), copernicus-dem-30m (GLO-30)
 ```
 
-The dashboard and the CLI call the same functions (`train_models`, `classify_scene`), so a result produced in one is identical to the same run in the other.
+The dashboard, the REST API and the command line all call the same core functions, so a result produced one way is the same as one produced another way.
 
-### Database (SQLite, `data/rockmap.db`)
+### Data layout (`ROCKMAP_DATA_DIR`)
+```
+rockmap.db                       SQLite database
+regions/<id>/region.json         configuration (AOI, CRS, resolution, season)
+            grid.json            tile grid;  state.json  per-tile status
+            tiles/<tx>_<ty>/     stack.tif (6 bands + SCL code, uint16) dem.tif classified.tif confidence.tif meta.json
+            stack.vrt dem.vrt    virtual mosaics used for seamless halo reads
+            mosaic/*.tif         region-wide tiled GeoTIFFs with overviews
+            products/            stats.json lithology.geojson report.pdf
+            references/          uploaded geological maps
+models/<name>/                   meta.json cnn.pt rf.joblib svm.joblib cm_*.png
+scenes/<id>/ · jobs/<id>/        single-scene workflow
+logs/job<id>.log                 per-job logs
+```
 
-| Table | Key columns |
+### Database tables
+| Table | Purpose |
 |---|---|
-| `scenes` | id, name, source (upload/demo), sensor, dos, folder, has_dem, has_reference, has_cloud, width, height, crs, bounds (WGS84 JSON), pixel_size |
-| `models` | id, name, folder, scene_id, uses_dem, best_algo, summary (JSON: OA / kappa / F1 per algorithm) |
-| `jobs` | id, kind (train/classify), status (queued/running/done/failed), progress, message, params (JSON), scene_id, model_id, folder, error |
+| `users` | username, password hash, role, API-token hash, active flag |
+| `regions` | name, folder, preset, bounds |
+| `scenes` | single-scene uploads and their layers |
+| `models` | trained bundles with a summary (OA / kappa / F1 per algorithm), source scene or region |
+| `jobs` | kind, status, progress, message, params, heartbeat, attempts, cancel flag, user |
+| `annotations` | training polygons drawn on the map (class, geometry, author) |
+| `audit` | who did what, and when |
+
+### Region processing
+1. **Grid.** The AOI is projected to the UTM zone of its centroid (EPSG:32643 for Gilgit-Baltistan) and covered with square tiles, 1024 px × 20 m = 20.48 km by default. Only tiles that touch the AOI are kept.
+2. **Acquire (per tile).** The DEM comes from Copernicus GLO-30 1° COGs, reprojected onto the tile. Scenes are searched with the STAC API, or by listing the S3 bucket by MGRS granule when STAC is unreachable. Up to *N* least-cloudy scenes are read. For each scene, the six bands plus SCL are read with an HTTP range request, warped onto the tile, cloud and shadow are removed, and C-correction is applied. The tile value is the per-pixel median of clear observations. Snow observations are used only where no snow-free observation exists. Pixels outside the AOI are set to no-data.
+3. **Train.** Tiles that overlap reference polygons or rasters are sampled with the same stratified spatial-block sampler used for single scenes, with a per-tile share of the class quota. The normaliser and all models are then fitted once.
+4. **Classify.** Each tile is predicted from `stack.vrt` / `dem.vrt` with a 14-pixel halo, so CNN context, terrain derivatives and the majority filter are identical across tile edges. Class counts per tile are stored for fast statistics.
+5. **Products.** Mosaics are written tile by tile into one tiled GeoTIFF per layer, then overviews are built. Statistics are the sum of the tile counts; district statistics come from rasterising the districts on each tile. Polygons come from a sieve followed by polygonisation per tile. The PDF is drawn with matplotlib.
 
 ## 2. Methodology
 
@@ -40,10 +72,19 @@ The dashboard and the CLI call the same functions (`train_models`, `classify_sce
 3. **Cloud / shadow masking.** The system uses the Sentinel-2 SCL classes (0, 1, 3, 8, 9, 10, 11) or the Landsat QA_PIXEL bits 0 to 5. If neither is available, it falls back to the Haze Optimized Transform: `blue − 0.5·red − 0.08 > 0`, combined with brightness and spectral-flatness tests so that bright carbonates are not masked. Masked pixels are left out of training and get the value 255 in the output map.
 4. **Band stacking and co-registration.** The six bands are resampled onto one grid (20 m for Sentinel-2). The DEM and the reference map are reprojected onto the scene grid, the DEM with bilinear resampling and the map with nearest-neighbour.
 
+### 2.1b Surface masks (mountain terrain)
+Before classification, pixels where rock cannot be seen are labelled with their own classes:
+* **snow / glacier / ice**: NDSI > 0.4 with green > 0.15 and NIR > 0.11, or SCL 11
+* **water**: NDSI > 0.1 with dark NIR, or NDWI > 0.15, or SCL 6
+* **dense vegetation**: NDVI > 0.45
+* **terrain shadow**: mean reflectance < 0.035, or cos(i) < 0.02 from the DEM and the sun position
+
+Masked pixels are left out of training and statistics, and appear as separate classes on the map.
+
 ### 2.2 Features (19 per pixel)
 * **Bands:** blue, green, red, NIR, SWIR1, SWIR2.
 * **Indices:** NDVI (vegetation), SWIR1/SWIR2 (clay Al-OH and carbonate CO₃ absorptions), red/blue (ferric iron oxides), SWIR1/NIR (ferrous iron, mafic minerals), red/green (iron staining), brightness, and a bare-rock index (SWIR1−NIR)/(SWIR1+NIR).
-* **Terrain (from SRTM):** scene-normalised elevation, slope, sin and cos of aspect, hillshade, and roughness (a topographic position index). Rock resistance controls relief, so these features add information that the spectra do not carry.
+* **Terrain (from the Copernicus / SRTM DEM):** absolute elevation (km, comparable across tiles), slope, sin and cos of aspect, hillshade, and roughness (a topographic position index). Rock resistance controls relief, so these features add information that the spectra do not carry.
 
 Features are z-score normalised with mean and standard deviation computed on the training pixels. These values are stored with the model and reused unchanged at inference.
 
