@@ -169,9 +169,12 @@ def create_app(root: Optional[Path] = None, sync_jobs: bool = False, workers: Op
     app.extensions["rockmap_db"] = db
     _bootstrap_admin(db, root)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("rasterio").setLevel(logging.WARNING)
 
     from .regions import bp as regions_bp
+    from .field import bp as field_bp
     app.register_blueprint(regions_bp)
+    app.register_blueprint(field_bp)
 
     if workers is None:
         workers = int(os.environ.get("ROCKMAP_WORKERS", "1"))
@@ -529,7 +532,7 @@ def create_app(root: Optional[Path] = None, sync_jobs: bool = False, workers: Op
     def files(relpath):
         # only serve from the data sub-folders (no traversal out of them)
         norm = posixpath.normpath(relpath)
-        if norm.startswith(("/", "..")) or norm.split("/", 1)[0] not in ("scenes", "jobs", "models", "regions"):
+        if norm.startswith(("/", "..")) or norm.split("/", 1)[0] not in ("scenes", "jobs", "models", "regions", "observations"):
             abort(404)
         parts = norm.split("/")
         if parts[0] == "regions" and len(parts) > 2 and parts[2] in ("cache",):

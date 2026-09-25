@@ -21,6 +21,8 @@
          data-tiles-api="{{ url_for('regions.api_region_tiles', region_id=row.id) }}"
          data-query-api="{{ url_for('regions.api_region_query', region_id=row.id) }}"
          data-ann-api="{{ url_for('regions.api_annotations', region_id=row.id) }}"
+         data-targets-api="{{ url_for('regions.api_region_targets', region_id=row.id) }}"
+         data-obs-api="{{ url_for('field.api_observations', region_id=row.id) }}"
          data-tile-url="{{ url_for('regions.tile', region_id=row.id, layer='LAYER', z=0, x=0, y=0)|replace('/0/0/0.png', '/{z}/{x}/{y}.png') }}?v={{ version }}"
          data-layers="{{ layers|tojson|forceescape }}"
          data-can-edit="{{ 1 if has_role('analyst') else 0 }}"
@@ -39,6 +41,12 @@
   </div>
 
   <div class="side-panel">
+    {% if insights %}
+    <div class="card insights">
+      <h2>Key findings</h2>
+      <ul>{% for line in insights %}<li>{{ line }}</li>{% endfor %}</ul>
+    </div>
+    {% endif %}
     <div class="card" id="jobs-card" data-active="{{ active|map(attribute='id')|list|tojson }}">
       <h2>Status</h2>
       <div class="grid" style="grid-template-columns: repeat(3, 1fr); gap: 8px">
@@ -72,9 +80,18 @@
           <button class="btn small">Start acquisition</button>
         </form>
       </details>
+      <details {{ 'open' if summary.acquired and not analytics }}>
+        <summary><b>1b · Analyse — no training data needed</b> {% if analytics %}<span class="muted">(done {{ analytics.created[5:16] }})</span>{% endif %}</summary>
+        <form method="post" action="{{ url_for('regions.region_run', region_id=row.id) }}">{{ csrf_field() }}
+          <input type="hidden" name="stage" value="analyze">
+          <p class="hint">Finds mineral-alteration targets, maps landslide / rockfall susceptibility and groups the terrain into spectral units that you can name (step 3b) to get a rock map immediately.</p>
+          <label>Number of spectral units</label><input type="number" name="n_clusters" value="10" min="2" max="16">
+          <button class="btn small" style="margin-top: 8px" {{ 'disabled' if not summary.acquired }}>Run analytics</button>
+        </form>
+      </details>
       <details>
-        <summary><b>2 · Training data & model</b> <span class="muted">({{ counts.reference_files }} maps, {{ counts.drawn_areas }} drawn areas)</span></summary>
-        <p class="hint">Upload a digitised geological map (GeoJSON) and/or draw training areas on the map with the tool below the map.</p>
+        <summary><b>2 · Training data & model</b> <span class="muted">({{ counts.reference_files }} maps, {{ counts.drawn_areas }} drawn areas, {{ counts.field_observations }} field points)</span></summary>
+        <p class="hint">Upload a digitised geological map (GeoJSON), draw training areas with the tool below the map, and/or collect points with the <a href="{{ url_for('field.field_page') }}">Field app</a> (probable / certain observations are used).</p>
         {% for r in refs %}
           <div class="row" style="margin: 4px 0"><span class="mono">{{ r.name }}</span> <span class="muted">{{ r.polygons }} polygons, field {{ r.field }}</span><span class="spacer"></span>
           <form class="inline" method="post" action="{{ url_for('regions.region_reference_delete', region_id=row.id, idx=loop.index0) }}">{{ csrf_field() }}<button class="btn small danger">✕</button></form></div>
@@ -130,11 +147,84 @@
         <summary><b>Run everything</b></summary>
         <form method="post" action="{{ url_for('regions.region_run', region_id=row.id) }}" class="stage-form">{{ csrf_field() }}
           <input type="hidden" name="stage" value="pipeline"><input type="hidden" name="tiles" class="tiles-input">
-          <p class="hint">Acquire → train (unless a model is chosen) → classify → products.</p>
+          <p class="hint">Acquire → analytics → train (if training data exists, unless a model is chosen) → classify → products. Works even with no training data: you get imagery, surface cover, mineral targets, hazard and spectral units.</p>
+          <input type="hidden" name="n_clusters" value="10">
           <label>Model</label><select name="model_id"><option value="">train a new model from the training data</option>{% for m in models %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}</select>
           <button class="btn small" style="margin-top: 8px">Run pipeline</button>
         </form>
       </details>
+    </div>
+    {% endif %}
+
+    {% if analytics %}
+    <div class="card">
+      <div class="row"><h2 style="margin: 0">Mineral alteration targets</h2><span class="spacer"></span>
+        {% if products['targets.csv'] %}<a class="btn small ghost" href="{{ url_for('regions.region_targets_file', region_id=row.id, fmt='csv') }}">CSV</a>
+        <a class="btn small ghost" href="{{ url_for('regions.region_targets_file', region_id=row.id, fmt='geojson') }}">GeoJSON</a>{% endif %}</div>
+      <p class="hint">{{ analytics.targets_total }} anomalies of clay / iron-oxide / ferrous ratios on bare ground. Screening targets for field checks — not proven deposits.</p>
+      {% if analytics.targets_top %}
+      <div class="table-wrap"><table>
+        <tr><th>#</th><th>Type</th><th class="num">Score</th><th class="num">ha</th><th class="num">Elev.</th><th></th></tr>
+        {% for t in analytics.targets_top[:10] %}
+        <tr><td>{{ t.id }}</td><td>{{ t.type_label.split(' (')[0] }}</td><td class="num">{{ '%.0f' % t.mean_score }}</td><td class="num">{{ '%.1f' % t.area_ha }}</td>
+          <td class="num">{{ '%.0f' % t.elevation_m if t.elevation_m is defined and t.elevation_m is not none else '–' }}</td>
+          <td><a href="#" class="zoom-to" data-lat="{{ t.lat }}" data-lon="{{ t.lon }}">zoom</a></td></tr>
+        {% endfor %}
+      </table></div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <h2>Landslide / rockfall susceptibility</h2>
+      {% set hz = analytics.hazard_km2 %}{% set hz_total = hz.values()|sum %}
+      {% if hz_total %}
+      <table>{% for k, hc in hazard_classes.items() %}{% set v = hz.get(k|string, 0) %}
+        <tr><td><span class="swatch" style="background: {{ hc[1] }}"></span>{{ hc[0] }}</td><td class="num">{{ '{:,.1f}'.format(v) }} km²</td>
+        <td style="width: 90px"><div class="bar"><span style="width: {{ 100 * v / hz_total }}%; background: {{ hc[1] }}"></span></div></td></tr>{% endfor %}
+      </table>
+      <p class="hint">Indicative index from slope, relief, river undercutting, rock strength and bare ground (weights 40/15/15/20/10 %). Use for planning field surveys and roads, not as an engineering assessment.</p>
+      {% else %}<p class="empty">Needs a DEM.</p>{% endif %}
+    </div>
+
+    <div class="card">
+      <h2>Spectral units → rock map</h2>
+      <p class="hint">Each unit groups pixels with similar spectra. Name the units you recognise (from field knowledge or a map) and RockMap turns them into a lithology map instantly — no model training needed.</p>
+      {% if has_role('analyst') %}<form method="post" action="{{ url_for('regions.region_units', region_id=row.id) }}">{{ csrf_field() }}{% endif %}
+      <div class="table-wrap"><table>
+        <tr><th>Unit</th><th>Spectrum</th><th class="num">km²</th><th class="num">Elev.</th><th>Rock class</th></tr>
+        {% for c in analytics.clusters if c.pixels %}
+        {% set sp = c.spectrum %}{% set mx = [sp|max, 0.01]|max %}
+        <tr><td><span class="swatch" style="background: {{ c.color }}"></span>{{ c.id }}</td>
+          <td><svg width="70" height="22" viewBox="0 0 70 22" aria-label="reflectance spectrum"><polyline fill="none" stroke="{{ c.color }}" stroke-width="2"
+            points="{% for v in sp %}{{ 4 + loop.index0 * 12 }},{{ 20 - 18 * v / mx }} {% endfor %}"/></svg></td>
+          <td class="num">{{ '{:,.1f}'.format(c.area_km2) }}</td><td class="num">{{ '%.0f' % c.mean_elevation_m if c.mean_elevation_m else '–' }}</td>
+          <td>{% if has_role('analyst') %}<select name="unit_{{ c.id }}" style="padding: 4px"><option value="">—</option>{% for rc in classes %}<option value="{{ rc.id }}" {{ 'selected' if c.class_id == rc.id }}>{{ rc.name }}</option>{% endfor %}</select>
+              {% else %}{{ class_by_id[c.class_id].name if c.class_id else '—' }}{% endif %}</td></tr>
+        {% endfor %}
+      </table></div>
+      {% if has_role('analyst') %}<button class="btn small" style="margin-top: 8px">Create rock map from units</button></form>{% endif %}
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <div class="row"><h2 style="margin: 0">Field validation</h2><span class="spacer"></span><a class="btn small ghost" href="{{ url_for('field.field_page') }}">Field app</a></div>
+      <p class="hint">{{ counts.field_observations }} field observation(s) in this region.</p>
+      {% if validation and validation.metrics %}
+        <div class="row" style="gap: 24px"><div><div class="stat">{{ validation.metrics.overall_accuracy | pct }}</div><div class="stat-label">agreement with map</div></div>
+        <div><div class="stat">{{ validation.n_compared }}</div><div class="stat-label">points compared</div></div></div>
+      {% elif counts.field_observations %}<p class="empty">Classify the region to compare the map with field observations.</p>{% endif %}
+    </div>
+
+    {% if has_role('analyst') %}
+    <div class="card">
+      <h2>Share with clients</h2>
+      {% if share_url %}
+        <p class="hint">Anyone with this link can view the maps, findings and targets (read-only, no login):</p>
+        <p class="mono" style="word-break: break-all"><a href="{{ share_url }}" target="_blank">{{ share_url }}</a></p>
+        <form method="post" action="{{ url_for('regions.region_share', region_id=row.id) }}">{{ csrf_field() }}<input type="hidden" name="action" value="revoke"><button class="btn small danger">Revoke link</button></form>
+      {% else %}
+        <form method="post" action="{{ url_for('regions.region_share', region_id=row.id) }}">{{ csrf_field() }}<input type="hidden" name="action" value="create"><button class="btn small ghost">Create public read-only link</button></form>
+      {% endif %}
     </div>
     {% endif %}
 
@@ -162,6 +252,10 @@
         {% if products['report.pdf'] %}<a class="btn small ghost" href="{{ url_for('files', relpath=row.folder ~ '/products/report.pdf') }}?download=1">PDF report</a>{% endif %}
         {% if products['lithology.geojson'] %}<a class="btn small ghost" href="{{ url_for('files', relpath=row.folder ~ '/products/lithology.geojson') }}?download=1">Polygons (GeoJSON)</a>{% endif %}
         {% for l in layers %}<a class="btn small ghost" href="{{ url_for('files', relpath=row.folder ~ '/mosaic/' ~ l ~ '.tif') }}?download=1">{{ l }}.tif</a>{% endfor %}
+      </div>
+      <p class="hint" style="margin-top: 10px">QGIS styles (load with Layer Properties ▸ Style ▸ Load Style):</p>
+      <div class="row">
+        {% for l in ['lithology', 'surface', 'hazard', 'clusters'] if l in layers %}<a class="btn small ghost" href="{{ url_for('regions.region_style', region_id=row.id, layer=l) }}">{{ l }}.qml</a>{% endfor %}
         {% if not layers and not products['report.pdf'] %}<span class="muted">Nothing yet.</span>{% endif %}
       </div>
     </div>
@@ -172,6 +266,12 @@
         {% for c in rock_classes %}<li><span class="swatch" style="background: {{ c.color }}"></span>{{ c.name }}</li>{% endfor %}
         {% for c in mask_classes if c.id != 255 %}<li><span class="swatch" style="background: {{ c.color }}"></span>{{ c.name }}</li>{% endfor %}
       </ul>
+      {% if analytics %}
+      <h3>Alteration score</h3>
+      <div class="gradient-bar"></div><div class="row muted" style="font-size: 12px"><span>40 (weak)</span><span class="spacer"></span><span>100 (strong anomaly)</span></div>
+      <h3>Susceptibility</h3>
+      <ul class="legend">{% for k, hc in hazard_classes.items() %}<li><span class="swatch" style="background: {{ hc[1] }}"></span>{{ hc[0] }}</li>{% endfor %}</ul>
+      {% endif %}
     </div>
 
     <div class="card">

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ cfg.name }} · RockMap</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
+  <script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
+</head>
+<body>
+<header class="top"><span class="brand">
+  <svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true"><path d="M3 26 11 10l5 7 4-5 9 14z" fill="#b5562b"/><path d="M11 10l5 7-4 9H3z" fill="#e0a458"/><circle cx="24" cy="7" r="3" fill="#4fa3e0"/></svg>
+  RockMap</span><span class="muted">Shared read-only map{% if organisation %} · {{ organisation }}{% endif %}</span></header>
+<main class="wide">
+  <h1>{{ cfg.name }}</h1>
+  <p class="sub">Geological mapping from Sentinel-2 imagery and the Copernicus DEM · {{ cfg.resolution|int }} m · EPSG:{{ cfg.epsg }}</p>
+  <div class="region-layout">
+    <div class="card map-card">
+      <div id="region-map" data-tiles-api="{{ url_for('regions.share_tiles_api', token=token) }}"
+           data-query-api="{{ url_for('regions.share_query', token=token) }}"
+           data-targets-api="{{ url_for('regions.share_targets', token=token) }}"
+           data-tile-url="{{ url_for('regions.share_tile', token=token, layer='LAYER', z=0, x=0, y=0)|replace('/0/0/0.png', '/{z}/{x}/{y}.png') }}?v={{ version }}"
+           data-layers="{{ layers|tojson|forceescape }}" data-can-edit="0" data-classes="{{ classes|tojson|forceescape }}"></div>
+      <div class="map-tools row"><label class="check" style="margin: 0">Lithology opacity <input type="range" min="0" max="100" value="80" id="lith-opacity"></label></div>
+      <p class="hint" id="map-hint">Click the map for rock type, confidence and elevation. Use the layer button (top right) for mineral targets, hazard and imagery.</p>
+    </div>
+    <div class="side-panel">
+      {% if insights %}<div class="card insights"><h2>Key findings</h2><ul>{% for line in insights %}<li>{{ line }}</li>{% endfor %}</ul></div>{% endif %}
+      {% if stats and stats.classified_km2 %}
+      <div class="card"><h2>Area statistics</h2><table>
+        <tr><th>Class</th><th class="num">km²</th><th class="num">% rock</th></tr>
+        {% for s in stats.region if s.pixels %}<tr><td><span class="swatch" style="background: {{ s.color }}"></span>{{ s.name }}</td><td class="num">{{ '{:,.1f}'.format(s.area_km2) }}</td><td class="num">{{ '%.1f' % s.percent if s.percent is not none else '–' }}</td></tr>{% endfor %}
+      </table></div>
+      {% endif %}
+      {% if analytics and analytics.targets_top %}
+      <div class="card"><h2>Top alteration targets</h2><table>
+        <tr><th>#</th><th>Type</th><th class="num">Score</th><th class="num">ha</th><th></th></tr>
+        {% for t in analytics.targets_top[:10] %}<tr><td>{{ t.id }}</td><td>{{ t.type_label.split(' (')[0] }}</td><td class="num">{{ '%.0f' % t.mean_score }}</td><td class="num">{{ '%.1f' % t.area_ha }}</td><td><a href="#" class="zoom-to" data-lat="{{ t.lat }}" data-lon="{{ t.lon }}">zoom</a></td></tr>{% endfor %}
+      </table><p class="hint">Screening targets for field checks, not proven deposits.</p></div>
+      {% endif %}
+      <div class="card"><h2>Legend</h2><ul class="legend">
+        {% for c in rock_classes %}<li><span class="swatch" style="background: {{ c.color }}"></span>{{ c.name }}</li>{% endfor %}
+        {% for c in mask_classes if c.id != 255 %}<li><span class="swatch" style="background: {{ c.color }}"></span>{{ c.name }}</li>{% endfor %}
+      </ul>
+      {% if analytics %}<h3>Susceptibility</h3><ul class="legend">{% for k, hc in hazard_classes.items() %}<li><span class="swatch" style="background: {{ hc[1] }}"></span>{{ hc[0] }}</li>{% endfor %}</ul>{% endif %}
+      </div>
+    </div>
+  </div>
+</main>
+<footer>RockMap · Contains modified Copernicus Sentinel data and Copernicus DEM</footer>
+<script src="{{ url_for('static', filename='region.js') }}"></script>
+</body>
+</html>

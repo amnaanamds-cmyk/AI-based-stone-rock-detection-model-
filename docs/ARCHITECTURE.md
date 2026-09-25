@@ -105,6 +105,24 @@ The system produces a per-pixel argmax class and a confidence value (the maximum
 * **Model level.** Held-out spatial test blocks: overall accuracy, Cohen's kappa, macro F1, per-class precision (user's accuracy), recall (producer's accuracy) and a confusion matrix.
 * **Map level.** Every valid pixel of the classified map is compared with the reference geological map, and an agreement map (green = agrees, red = disagrees) is produced.
 
+### 2.7 Analytics that need no training data (`rockmap/analytics.py`, `Region.analyze`)
+* **Mineral alteration.** For each usable pixel the system computes four ratios: clay/hydroxyl SWIR1/SWIR2, iron oxide red/blue, ferrous SWIR2/NIR + green/red, and gossan SWIR1/red. It then takes a robust z-score of each ratio against the region-wide median and MAD. Only positive anomalies count, and they are combined with weights of 0.40 / 0.35 / 0.15 / 0.10. A combined score of 3 robust sigma maps to 100.
+
+  Several pixel types are excluded because ratios there are unreliable: dark pixels (mean reflectance below 0.08), partial snow (NDSI above 0.15), and a 100 m buffer around snow, cloud and no-data. Vegetation above NDVI 0.25 is excluded for the SWIR ratios only.
+
+  Connected areas scoring 75 or more and covering at least 1 ha become **targets**. Each target records its centroid, area, mean and peak score, dominant anomaly type, elevation and lithology. Targets are ranked by mean score × log(size).
+* **Landslide / rockfall susceptibility.** A knowledge-driven weighted overlay of five factors:
+  * slope (40 %), with a piecewise response that peaks at 40–50°
+  * relief within 300 m (15 %)
+  * proximity to rivers (15 %), using exp(−distance/400 m)
+  * rock weakness from the lithology map (20 %): shale and Quaternary deposits are weakest, granite strongest
+  * absence of vegetation (10 %)
+
+  The index is split into 5 classes at 0.35 / 0.50 / 0.65 / 0.80. Snow and water are excluded.
+* **Spectral units.** Mini-batch k-means is run on a region-wide pixel sample. The inputs are brightness-normalised spectra, log brightness and the 7 indices, so illumination affects the result less. Each unit gets a confidence equal to the margin between the nearest and second-nearest cluster centre. A geologist maps units to rock classes, which gives a lithology map with no model training (`Region.label_clusters`).
+* **Field validation.** Phone observations are sampled against the current map, and the system reports agreement, kappa and a confusion matrix. Observations marked *probable* or *certain* also become 40 × 40 m training squares.
+* **Insights.** Rule-based sentences generated from the statistics and analytics feed the dashboard and the executive-summary page of the PDF report.
+
 ## 3. Limitations and future work
 * Reference geological maps are generalised, so the labels near contacts are uncertain. That uncertainty limits how accurate any classifier can appear.
 * Vegetation cover hides the rock signal. The project scope targets bare or sparsely vegetated terrain.

@@ -3,7 +3,8 @@
   "use strict";
   var el = document.getElementById("region-map");
   if (!el || !window.L) return;
-  var csrf = document.querySelector('meta[name="csrf-token"]').content;
+  var csrfMeta = document.querySelector('meta[name="csrf-token"]');
+  var csrf = csrfMeta ? csrfMeta.content : "";
   var esc = function (v) {
     return String(v === undefined || v === null ? "" : v).replace(/[&<>"']/g, function (c) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
@@ -41,6 +42,10 @@
     overlays["Surface cover (snow, water, vegetation, shadow)"] = L.tileLayer(tileUrl("surface"), { maxZoom: 17, maxNativeZoom: 16, opacity: 0.85 });
     if (!lith) overlays["Surface cover (snow, water, vegetation, shadow)"].addTo(map);
   }
+  var extra = { alteration: "Mineral alteration score", hazard: "Landslide / rockfall susceptibility", clusters: "Spectral units" };
+  Object.keys(extra).forEach(function (l) {
+    if (available.indexOf(l) >= 0) overlays[extra[l]] = L.tileLayer(tileUrl(l), { maxZoom: 17, maxNativeZoom: 16, opacity: l === "clusters" ? 0.75 : 0.85 });
+  });
   if (available.indexOf("confidence") >= 0) overlays["Confidence"] = L.tileLayer(tileUrl("confidence"), { maxZoom: 17, maxNativeZoom: 16, opacity: 0.7 });
 
   var statusColor = function (p) { return p.error ? "#c62828" : p.classified ? "#2e7d32" : p.acquired ? "#e0a458" : "#9aa0a6"; };
@@ -66,6 +71,47 @@
     }
   }).addTo(map);
   overlays["Training areas"] = ann;
+
+  var targets = L.geoJSON(null, {
+    pointToLayer: function (f, ll) {
+      var p = f.properties, r = 4 + Math.min(8, Math.sqrt(p.area_ha || 1) * 1.5);
+      return L.circleMarker(ll, { radius: r, color: "#fff", weight: 1.5, fillColor: p.type === "clay" ? "#7b3294" : p.type === "ferrous" ? "#1b7837" : "#e31a1c", fillOpacity: 0.9 });
+    },
+    onEachFeature: function (f, layer) {
+      var p = f.properties;
+      layer.bindPopup("<b>Target #" + (+p.id) + "</b><br>" + esc(p.type_label) + "<br>Score " + (+p.mean_score).toFixed(0) + " (peak " + (+p.peak_score).toFixed(0) + ")" +
+        "<br>" + (+p.area_ha).toFixed(1) + " ha" + (p.elevation_m ? " · " + Math.round(p.elevation_m) + " m" : "") +
+        (p.lithology ? "<br>" + esc(p.lithology) : "") + "<br><span class='muted'>" + (+p.lat).toFixed(5) + "°N, " + (+p.lon).toFixed(5) + "°E</span>");
+    }
+  });
+  if (el.dataset.targetsApi) {
+    fetch(el.dataset.targetsApi).then(function (r) { return r.json(); }).then(function (d) {
+      targets.addData(d); if (d.features && d.features.length) targets.addTo(map);
+    });
+    overlays["Alteration targets"] = targets;
+  }
+  var obsLayer = L.geoJSON(null, {
+    pointToLayer: function (f, ll) {
+      return L.marker(ll, { icon: L.divIcon({ className: "", html: "<div style='width:14px;height:14px;transform:rotate(45deg);border:2px solid #fff;box-shadow:0 0 0 1px #000;background:" + esc(f.properties.color) + "'></div>", iconSize: [14, 14] }) });
+    },
+    onEachFeature: function (f, layer) {
+      var p = f.properties;
+      layer.bindPopup("<b>Field observation</b><br><span class='swatch' style='background:" + esc(p.color) + "'></span>" + esc(p["class"]) +
+        " <span class='muted'>(" + ["", "unsure", "probable", "certain"][p.certainty] + ")</span>" + (p.note ? "<br>" + esc(p.note) : "") +
+        "<br><span class='muted'>" + esc(p.author) + " · " + esc((p.observed_at || "").slice(0, 16)) + "</span>" +
+        (p.photo ? "<br><a href='" + esc(p.photo) + "' target='_blank'><img src='" + esc(p.photo) + "' style='max-width:180px;margin-top:6px;border-radius:4px'></a>" : ""));
+    }
+  });
+  if (el.dataset.obsApi) {
+    fetch(el.dataset.obsApi).then(function (r) { return r.json(); }).then(function (d) { obsLayer.addData(d); if (d.features.length) obsLayer.addTo(map); });
+    overlays["Field observations"] = obsLayer;
+  }
+  document.querySelectorAll(".zoom-to").forEach(function (a) {
+    a.addEventListener("click", function (e) {
+      e.preventDefault(); map.setView([+a.dataset.lat, +a.dataset.lon], 15);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  });
   L.control.layers(bases, overlays, { collapsed: true }).addTo(map);
   L.control.scale({ imperial: false }).addTo(map);
 
@@ -76,6 +122,7 @@
     window._rockmapTiles = d.features;
   });
   var loadAnn = function () {
+    if (!el.dataset.annApi) return;
     fetch(el.dataset.annApi).then(function (r) { return r.json(); }).then(function (d) { ann.clearLayers(); ann.addData(d); });
   };
   loadAnn();

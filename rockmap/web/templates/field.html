@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Field{% endblock %}
+{% block head %}
+<link rel="manifest" href="{{ url_for('field.manifest') }}">
+<meta name="theme-color" content="#b5562b">
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
+<script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
+{% endblock %}
+{% block content %}
+<h1>Field observation</h1>
+<p class="sub">Record the rock type where you stand. Works offline: observations are queued on this phone and uploaded when a connection returns. They become training data and are used to check the accuracy of the maps.</p>
+<div id="queue-bar" class="flash" hidden></div>
+{% if has_role('analyst') %}
+<form id="obs-form" class="card" data-api="{{ url_for('field.api_observations') }}" data-sw="{{ url_for('field.service_worker') }}">
+  <div class="row"><button type="button" class="btn" id="gps-btn">📍 Use my location</button><span id="gps-info" class="muted">or tap the map</span></div>
+  <div id="field-map" style="height: 240px; border-radius: 8px; margin-top: 10px"></div>
+  <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 8px">
+    <div><label for="lat">Latitude</label><input type="number" step="any" id="lat" name="lat" required></div>
+    <div><label for="lon">Longitude</label><input type="number" step="any" id="lon" name="lon" required></div>
+  </div>
+  <input type="hidden" id="accuracy_m" name="accuracy_m">
+  <label for="class_id">Rock type observed</label>
+  <select id="class_id" name="class_id" required>{% for c in classes %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select>
+  <label>Certainty</label>
+  <div class="row"><label class="check"><input type="radio" name="certainty" value="1"> unsure</label>
+  <label class="check"><input type="radio" name="certainty" value="2" checked> probable</label>
+  <label class="check"><input type="radio" name="certainty" value="3"> certain (outcrop)</label></div>
+  <label for="photo">Photo</label>
+  <input type="file" id="photo" name="photo" accept="image/*" capture="environment">
+  <label for="note">Notes</label>
+  <textarea id="note" name="note" rows="2" placeholder="e.g. weathered granodiorite, jointed, near road bend"></textarea>
+  <label for="region_id">Region</label>
+  <select id="region_id" name="region_id"><option value="">automatic (from location)</option>{% for r in regions %}<option value="{{ r.id }}">{{ r.name }}</option>{% endfor %}</select>
+  <p style="margin-top: 14px"><button class="btn" style="width: 100%; justify-content: center">Save observation</button></p>
+</form>
+{% endif %}
+<div class="card" style="margin-top: 12px">
+  <h2>My recent observations</h2>
+  {% for o in recent %}<p style="margin: 4px 0"><span class="swatch" style="background: {{ class_by_id[o.class_id].color }}"></span>{{ class_by_id[o.class_id].name }} <span class="muted mono">{{ '%.5f' % o.lat }}, {{ '%.5f' % o.lon }} · {{ o.created[5:16] }}{{ ' · 📷' if o.photo }}</span></p>
+  {% else %}<p class="empty">None yet.</p>{% endfor %}
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='field.js') }}"></script>{% endblock %}

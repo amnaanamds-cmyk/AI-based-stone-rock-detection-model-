@@ -206,3 +206,64 @@ def test_region_presets_create(client):
     s = client.get(f"/api/regions/{rid}").get_json()
     assert s["config"]["epsg"] == 32643
     assert 150 < s["summary"]["tiles"] < 260       # ~73,000 km2 in 20.48 km tiles
+
+
+def _local_region(client, small_scene, tile="128"):
+    from rockmap.io import read_raster
+    _, info = read_raster(small_scene["scene"], bands=[1])
+    w, s, e, n = info.wgs84_bounds()
+    r = client.post("/regions/new", data={
+        "aoi_mode": "draw", "aoi_geojson": json.dumps({"type": "Polygon", "coordinates": [[[w, s], [e, s], [e, n], [w, n], [w, s]]]}),
+        "name": "Analytics valley", "resolution": "20", "tile_size": tile, "source": "local",
+        "local_scenes": str(small_scene["scene"]), "local_sensor": "reflectance", "local_dem": str(small_scene["dem"])})
+    return int(r.headers["Location"].split("/")[-1]), (w, s, e, n)
+
+
+def test_analytics_units_share_and_styles(client, app, small_scene):
+    rid, (w, s, e, n) = _local_region(client, small_scene)
+    client.post(f"/regions/{rid}/run", data={"stage": "acquire"})
+    client.post(f"/regions/{rid}/run", data={"stage": "analyze", "n_clusters": "5"})
+    page = client.get(f"/regions/{rid}").get_data(as_text=True)
+    assert "Spectral units" in page and "Landslide / rockfall susceptibility" in page and "Key findings" in page
+    client.post(f"/regions/{rid}/units", data={"unit_1": "4", "unit_2": "7", "unit_3": "1"})
+    assert client.get(f"/api/regions/{rid}").get_json()["summary"]["classified"] > 0
+    assert client.get(f"/regions/{rid}/targets.csv").status_code == 200
+    assert client.get(f"/api/regions/{rid}/targets").get_json()["type"] == "FeatureCollection"
+    qml = client.get(f"/regions/{rid}/style/lithology.qml").get_data(as_text=True)
+    assert "paletteEntry" in qml and "Granite" in qml
+    assert client.get(f"/regions/{rid}/style/hazard.qml").status_code == 200
+    # public share link: works without login, stops working after revoke
+    client.post(f"/regions/{rid}/share", data={"action": "create"})
+    token = app.extensions["rockmap_db"].get("regions", rid)["share_token"]
+    anon = app.test_client()
+    assert anon.get(f"/share/{token}").status_code == 200
+    assert anon.get(f"/share/{token}/api/query?lat={(s + n) / 2}&lon={(w + e) / 2}").get_json()["inside"]
+    assert anon.get(f"/share/{token}/tiles/hazard/12/0/0.png").status_code == 200
+    assert anon.get(f"/api/regions/{rid}").status_code == 401
+    client.post(f"/regions/{rid}/share", data={"action": "revoke"})
+    assert anon.get(f"/share/{token}").status_code == 404
+
+
+def test_field_observations(client, app, small_scene):
+    import base64
+    import io as _io
+    from PIL import Image
+    rid, (w, s, e, n) = _local_region(client, small_scene, "160")
+    buf = _io.BytesIO()
+    Image.new("RGB", (40, 30), (120, 80, 40)).save(buf, "JPEG")
+    photo = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+    r = client.post("/api/observations", json={"lat": (s + n) / 2, "lon": (w + e) / 2, "class_id": 4, "certainty": 3,
+                                               "note": "granite outcrop", "photo_data": photo})
+    assert r.status_code == 201 and r.get_json()["region_id"] == rid      # region found from location
+    assert client.post("/api/observations", json={"lat": 95, "lon": 0, "class_id": 4}).status_code == 400
+    gj = client.get(f"/api/observations?region_id={rid}").get_json()
+    assert len(gj["features"]) == 1 and gj["features"][0]["properties"]["photo"]
+    assert client.get(gj["features"][0]["properties"]["photo"]).status_code == 200
+    assert client.get("/field/").status_code == 200 and client.get("/field/sw.js").status_code == 200
+    # viewers cannot add, other analysts cannot delete
+    create_user(app.extensions["rockmap_db"], "view2", "viewer-pass-2", "viewer")
+    v = app.test_client()
+    login(v, "view2", "viewer-pass-2")
+    assert v.post("/api/observations", json={"lat": 35, "lon": 74, "class_id": 1}).status_code == 403
+    oid = gj["features"][0]["properties"]["id"]
+    assert client.delete(f"/api/observations/{oid}").get_json()["ok"]

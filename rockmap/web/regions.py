@@ -20,7 +20,9 @@ from .db import Database
 from .jobs import handler
 
 bp = Blueprint("regions", __name__)
-LAYERS = ("rgb", "falsecolor", "hillshade", "surface", "lithology", "confidence")
+LAYERS = ("rgb", "falsecolor", "hillshade", "surface", "lithology", "confidence", "alteration", "hazard", "clusters")
+STAGES = {"acquire": "region_acquire", "analyze": "region_analyze", "train": "region_train",
+          "classify": "region_classify", "products": "region_products", "pipeline": "region_pipeline"}
 
 
 def _db() -> Database:
@@ -55,6 +57,10 @@ def _training_features(db: Database, region: Region, region_id: int) -> tuple[li
     for a in db.all("annotations", "region_id = ?", (region_id,)):
         feats.append((a["geometry"], a["class_id"]))
         counts["drawn_areas"] += 1
+    from .field import observation_squares
+    obs = observation_squares(db, region_id)
+    feats += obs
+    counts["field_observations"] = len(obs)
     return feats, counts
 
 
@@ -119,8 +125,10 @@ def _do_products(ctx, region: Region, a=0.0, b=1.0):
                               progress=_scaled(ctx, a + (b - a) * 0.7, a + (b - a) * 0.9))
     ctx.progress(a + (b - a) * 0.92, "Writing PDF report")
     model = region.state().get("model")
+    obs = ctx.db.all("observations", "region_id = ?", (ctx.job["region_id"],))
+    validation = region.field_validation(obs) if obs and stats.get("classified_km2") else None
     region_report(region, out / "report.pdf", load_meta(model) if model else None, stats,
-                  os.environ.get("ROCKMAP_ORGANISATION", ""))
+                  os.environ.get("ROCKMAP_ORGANISATION", ""), analytics=region.analytics(), validation=validation)
 
 
 def _region_for(ctx) -> Region:
@@ -148,15 +156,37 @@ def job_region_products(ctx):
     _do_products(ctx, _region_for(ctx))
 
 
+@handler("region_analyze")
+def job_region_analyze(ctx):
+    _region_for(ctx).analyze(int(ctx.params.get("n_clusters", 10)), ctx.progress, ctx.log)
+
+
+@handler("region_label_units")
+def job_region_label_units(ctx):
+    region = _region_for(ctx)
+    region.label_clusters(ctx.params["mapping"], _scaled(ctx, 0, 0.5), ctx.log)
+    _do_products(ctx, region, 0.5, 1.0)
+
+
 @handler("region_pipeline")
 def job_region_pipeline(ctx):
-    """Acquire -> (train) -> classify -> mosaics, statistics, GeoJSON and PDF."""
+    """Acquire -> analytics -> (train) -> classify -> mosaics, statistics, GeoJSON and PDF.
+
+    Without a model and without training data the lithology step is skipped, but imagery,
+    surface cover, alteration targets, landslide susceptibility and spectral units are produced.
+    """
     region = _region_for(ctx)
-    _do_acquire(ctx, region, 0.0, 0.45)
+    _do_acquire(ctx, region, 0.0, 0.4)
+    region.analyze(int(ctx.params.get("n_clusters", 10)), _scaled(ctx, 0.4, 0.55), ctx.log)
     model_id = ctx.params.get("model_id")
     if not model_id:
-        model_id = _do_train(ctx, region, 0.45, 0.65)
-    _do_classify(ctx, region, int(model_id), 0.65, 0.85)
+        feats, _counts = _training_features(ctx.db, region, ctx.job["region_id"])
+        if feats:
+            model_id = _do_train(ctx, region, 0.55, 0.7)
+        else:
+            ctx.log("no model and no training data: skipping lithology classification")
+    if model_id:
+        _do_classify(ctx, region, int(model_id), 0.7, 0.85)
     _do_products(ctx, region, 0.85, 1.0)
 
 
@@ -244,9 +274,19 @@ def region_page(region_id):
     products = {n: (region.folder / "products" / n).exists() for n in ("report.pdf", "lithology.geojson", "stats.json")}
     models = [m for m in db.all("models") if m["region_id"] == region_id] + \
              [m for m in db.all("models") if m["region_id"] != region_id]
+    from ..analytics import HAZARD_CLASSES, insights
+    analytics = region.analytics()
+    stats = _stats(region)
+    obs = db.all("observations", "region_id = ?", (region_id,))
+    counts["field_observations"] = len(obs)
+    validation = region.field_validation(obs) if obs and summary_classified(region) else None
+    products.update({n: (region.folder / "products" / n).exists() for n in ("targets.csv", "targets.geojson")})
+    share_url = url_for("regions.share_page", token=row["share_token"], _external=True) if row.get("share_token") else None
     return render_template("region.html", row=row, region=region, cfg=region.config, summary=region.summary(),
                            state=st, jobs=jobs, active=active, counts=counts, refs=refs, layers=layers,
-                           products=products, models=models, stats=_stats(region),
+                           products=products, models=models, stats=stats, analytics=analytics,
+                           insights=insights(stats, analytics), hazard_classes=HAZARD_CLASSES,
+                           validation=validation, share_url=share_url,
                            districts=(region.folder / "districts.geojson").exists(),
                            version=st.get("mosaic_version", 0), algorithms=ALGORITHMS,
                            classes=[{"id": c.id, "name": c.name, "color": c.color} for c in ROCK_CLASSES],
@@ -262,8 +302,7 @@ def region_run(region_id):
     f = request.form
     tiles = [t for t in (f.get("tiles") or "").split(",") if t in set(region.tile_keys)] or None
     params: dict = {"tiles": tiles}
-    kind = {"acquire": "region_acquire", "train": "region_train", "classify": "region_classify",
-            "products": "region_products", "pipeline": "region_pipeline"}.get(stage)
+    kind = STAGES.get(stage)
     if not kind:
         abort(400)
     if stage in ("acquire", "pipeline"):
@@ -282,6 +321,8 @@ def region_run(region_id):
             return redirect(url_for("regions.region_page", region_id=region_id))
     if stage == "products":
         params.update(geojson=bool(f.get("geojson")), min_pixels=int(f.get("min_pixels") or 25))
+    if stage in ("analyze", "pipeline"):
+        params["n_clusters"] = min(16, max(2, int(f.get("n_clusters") or 10)))
     job_id = current_app.extensions["rockmap_submit"](kind, params, region_id=region_id)
     flash(f"Job #{job_id} queued.", "ok")
     return redirect(url_for("regions.region_page", region_id=region_id, job=job_id))
@@ -385,14 +426,146 @@ def region_stats_csv(region_id):
                     headers={"Content-Disposition": f"attachment; filename=region{region_id}_stats.csv"})
 
 
+def summary_classified(region: Region) -> bool:
+    return region.summary()["classified"] > 0
+
+
+@bp.post("/regions/<int:region_id>/units")
+@requires("analyst")
+def region_units(region_id):
+    """Geologist names the spectral units -> lithology map without a trained model."""
+    region = _region(_region_row(region_id))
+    info = region.analytics() or abort(400)
+    mapping = {}
+    for c in info["clusters"]:
+        v = request.form.get(f"unit_{c['id']}")
+        if v and v.isdigit() and int(v) in CLASS_IDS:
+            mapping[c["id"]] = int(v)
+    if not mapping:
+        flash("Assign at least one spectral unit to a rock class.", "error")
+        return redirect(url_for("regions.region_page", region_id=region_id))
+    job_id = current_app.extensions["rockmap_submit"]("region_label_units", {"mapping": mapping}, region_id=region_id)
+    return redirect(url_for("regions.region_page", region_id=region_id, job=job_id))
+
+
+@bp.post("/regions/<int:region_id>/share")
+@requires("analyst")
+def region_share(region_id):
+    import secrets
+    _region_row(region_id)
+    token = secrets.token_urlsafe(18) if request.form.get("action") == "create" else None
+    _db().update("regions", region_id, share_token=token)
+    audit("region.share." + ("create" if token else "revoke"), str(region_id))
+    flash("Public read-only link created." if token else "Public link revoked.", "ok")
+    return redirect(url_for("regions.region_page", region_id=region_id))
+
+
+@bp.route("/regions/<int:region_id>/targets.<fmt>")
+@requires("viewer")
+def region_targets_file(region_id, fmt):
+    if fmt not in ("csv", "geojson"):
+        abort(404)
+    region = _region(_region_row(region_id))
+    p = region.folder / "products" / f"targets.{fmt}"
+    if not p.exists():
+        abort(404)
+    return Response(p.read_bytes(), mimetype="text/csv" if fmt == "csv" else "application/geo+json",
+                    headers={"Content-Disposition": f"attachment; filename=region{region_id}_targets.{fmt}"})
+
+
+QML_LAYERS = ("lithology", "surface", "hazard", "clusters")
+
+
+@bp.route("/regions/<int:region_id>/style/<layer>.qml")
+@requires("viewer")
+def region_style(region_id, layer):
+    """QGIS style file (paletted renderer) for the downloaded GeoTIFF mosaics."""
+    from ..analytics import CLUSTER_PALETTE, HAZARD_CLASSES
+    if layer not in QML_LAYERS:
+        abort(404)
+    if layer in ("lithology", "surface"):
+        entries = [(c.id, c.color, c.name) for c in ALL_CLASSES.values() if c.id != CLOUD_CLASS]
+        if layer == "surface":
+            entries = [(1, "#cdaa7d", "Bare rock / soil")] + [e for e in entries if e[0] >= 250]
+    elif layer == "hazard":
+        entries = [(k, c, f"{n} susceptibility") for k, (n, c) in HAZARD_CLASSES.items()]
+    else:
+        info = _region(_region_row(region_id)).analytics() or {"clusters": []}
+        entries = [(c["id"], CLUSTER_PALETTE[(c["id"] - 1) % len(CLUSTER_PALETTE)],
+                    f"Unit {c['id']}" + (f" - {ALL_CLASSES[c['class_id']].name}" if c.get("class_id") else ""))
+                   for c in info["clusters"]]
+    from xml.sax.saxutils import quoteattr
+    items = "\n".join(f'        <paletteEntry value="{v}" color="{c}" alpha="255" label={quoteattr(n)}/>'
+                      for v, c, n in entries)
+    qml = f"""<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
+<qgis version="3.28" styleCategories="Symbology">
+  <pipe>
+    <rasterrenderer type="paletted" band="1" opacity="1" alphaBand="-1" nodataColor="">
+      <colorPalette>
+{items}
+      </colorPalette>
+    </rasterrenderer>
+  </pipe>
+</qgis>
+"""
+    return Response(qml, mimetype="application/xml",
+                    headers={"Content-Disposition": f"attachment; filename={layer}.qml"})
+
+
+# ----------------------------------------------------------------------------- public share pages
+def _shared(token: str) -> dict:
+    row = _db().one("regions", "share_token = ?", (token,)) if token else None
+    if not row:
+        abort(404)
+    return row
+
+
+@bp.route("/share/<token>")
+def share_page(token):
+    from ..analytics import HAZARD_CLASSES, insights
+    row = _shared(token)
+    region = _region(row)
+    st = region.state()
+    analytics = region.analytics()
+    stats = _stats(region)
+    layers = [lname for lname in LAYERS if (region.folder / "mosaic" / f"{lname}.tif").exists()]
+    return render_template("share.html", row=row, cfg=region.config, token=token, layers=layers,
+                           version=st.get("mosaic_version", 0), stats=stats, analytics=analytics,
+                           insights=insights(stats, analytics), hazard_classes=HAZARD_CLASSES,
+                           classes=[{"id": c.id, "name": c.name, "color": c.color} for c in ROCK_CLASSES])
+
+
+@bp.route("/share/<token>/tiles/<layer>/<int:z>/<int:x>/<int:y>.png")
+def share_tile(token, layer, z, x, y):
+    return _tile_response(_region(_shared(token)), layer, z, x, y)
+
+
+@bp.route("/share/<token>/api/tiles")
+def share_tiles_api(token):
+    return _tilegrid(_region(_shared(token)))
+
+
+@bp.route("/share/<token>/api/query")
+def share_query(token):
+    return _query(_region(_shared(token)))
+
+
+@bp.route("/share/<token>/api/targets")
+def share_targets(token):
+    return _targets(_region(_shared(token)))
+
+
 # ----------------------------------------------------------------------------- map tiles
 @bp.route("/tiles/<int:region_id>/<layer>/<int:z>/<int:x>/<int:y>.png")
 @requires("viewer")
 def tile(region_id, layer, z, x, y):
+    return _tile_response(_region(_region_row(region_id)), layer, z, x, y)
+
+
+def _tile_response(region: Region, layer: str, z: int, x: int, y: int):
     from ..tiles import cached_tile, empty_png
     if layer not in LAYERS or z > 20:
         abort(404)
-    region = _region(_region_row(region_id))
     mosaic = region.folder / "mosaic" / f"{layer}.tif"
     data = cached_tile(region.folder / "cache" / "tiles", mosaic, layer, z, x, y) if mosaic.exists() else empty_png()
     resp = Response(data, mimetype="image/png")
@@ -427,7 +600,10 @@ def api_region(region_id):
 @bp.route("/api/regions/<int:region_id>/tiles")
 @requires("viewer")
 def api_region_tiles(region_id):
-    region = _region(_region_row(region_id))
+    return _tilegrid(_region(_region_row(region_id)))
+
+
+def _tilegrid(region: Region):
     cache = region.folder / "cache" / "tilegrid.json"
     state_mtime = (region.folder / "state.json").stat().st_mtime
     if cache.exists() and cache.stat().st_mtime >= state_mtime:
@@ -442,7 +618,23 @@ def api_region_tiles(region_id):
 @bp.route("/api/regions/<int:region_id>/query")
 @requires("viewer")
 def api_region_query(region_id):
-    region = _region(_region_row(region_id))
+    return _query(_region(_region_row(region_id)))
+
+
+@bp.route("/api/regions/<int:region_id>/targets")
+@requires("viewer")
+def api_region_targets(region_id):
+    return _targets(_region(_region_row(region_id)))
+
+
+def _targets(region: Region):
+    p = region.folder / "products" / "targets.geojson"
+    if not p.exists():
+        return jsonify({"type": "FeatureCollection", "features": []})
+    return Response(p.read_text(), mimetype="application/json")
+
+
+def _query(region: Region):
     try:
         lat, lon = float(request.args["lat"]), float(request.args["lon"])
     except (KeyError, ValueError):
@@ -507,10 +699,9 @@ def api_region_job(region_id):
     """Start a region job: {"stage": "acquire|train|classify|products|pipeline", ...params}."""
     _region_row(region_id)
     d = request.get_json(silent=True) or {}
-    kind = {"acquire": "region_acquire", "train": "region_train", "classify": "region_classify",
-            "products": "region_products", "pipeline": "region_pipeline"}.get(d.pop("stage", None))
+    kind = STAGES.get(d.pop("stage", None))
     if not kind:
-        return jsonify(error="stage must be acquire, train, classify, products or pipeline"), 400
+        return jsonify(error=f"stage must be one of {', '.join(STAGES)}"), 400
     if kind == "region_classify" and not d.get("model_id"):
         return jsonify(error="model_id required"), 400
     job_id = current_app.extensions["rockmap_submit"](kind, d, region_id=region_id)

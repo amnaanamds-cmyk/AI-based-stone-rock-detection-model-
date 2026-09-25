@@ -133,3 +133,15 @@ pre.log { background: var(--bg); border: 1px solid var(--line); border-radius: 6
 .leaflet-popup-content { font-size: 13px; line-height: 1.5; }
 
 [hidden] { display: none !important; }
+.insights ul { margin: 0; padding-left: 18px; }
+.insights li { margin: 4px 0; }
+.gradient-bar { height: 12px; border-radius: 3px; background: linear-gradient(90deg, rgba(255,230,60,.5), #ff8c1a, #ff1400); }
+.target-marker { background: #ff1400; border: 2px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px #000; }
+@media (max-width: 760px) {
+  header.top { position: static; flex-wrap: wrap; gap: 8px 12px; padding: 10px 12px; }
+  header.top nav { order: 3; width: 100%; flex-wrap: nowrap; overflow-x: auto; gap: 16px; padding-bottom: 2px; }
+  header.top nav a { white-space: nowrap; }
+  header.top .user { margin-left: auto; }
+  main { padding: 16px 12px 48px; }
+  h1 { font-size: 21px; }
+}

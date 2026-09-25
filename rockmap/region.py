@@ -398,8 +398,10 @@ class Region:
         st = self.state()["tiles"]
         acquired = [k for k in self.tile_keys if st.get(k, {}).get("acquired")]
         classified = [k for k in self.tile_keys if st.get(k, {}).get("classified")]
+        analysed = [k for k in self.tile_keys if (self.tile_dir(k) / "analytics.tif").exists()]
         products = {"rgb": (3, acquired), "falsecolor": (3, acquired), "hillshade": (1, acquired),
-                    "surface": (1, acquired), "lithology": (1, classified), "confidence": (1, classified)}
+                    "surface": (1, acquired), "lithology": (1, classified), "confidence": (1, classified),
+                    "alteration": (1, analysed), "hazard": (1, analysed), "clusters": (1, analysed)}
         paths = {}
         for pi, (name, (count, keys)) in enumerate(products.items()):
             if not keys:
@@ -418,7 +420,8 @@ class Region:
                     dst.write_colormap(1, class_colormap())
                 factors = [f for f in (2, 4, 8, 16, 32, 64) if max(self.width, self.height) / f >= 256]
                 if factors:
-                    rs = Resampling.nearest if name in ("lithology", "surface") else Resampling.average
+                    rs = (Resampling.nearest if name in ("lithology", "surface", "hazard", "clusters")
+                          else Resampling.average)
                     dst.build_overviews(factors, rs)
                     dst.update_tags(ns="rio_overview", resampling=rs.name)
             paths[name] = path
@@ -428,6 +431,10 @@ class Region:
 
     def _render_tile(self, key: str, name: str) -> np.ndarray:
         d = self.tile_dir(key)
+        if name in ("alteration", "hazard", "clusters"):
+            band = {"alteration": 1, "hazard": 3, "clusters": 4}[name]
+            with rasterio.open(d / "analytics.tif") as src:
+                return src.read(band)[None]
         if name == "surface":
             # snow / water / vegetation / shadow straight from the imagery (no model needed); 1 = bare ground
             t = self.tile(key)
@@ -563,6 +570,199 @@ class Region:
         progress(1.0, f"Exported {n} polygons")
         return out_path
 
+    # -- 8. analytics (no training data needed) ---------------------------------------
+    def _read_tile(self, key: str, halo: int = 0):
+        """Scene data for a tile plus ``halo`` pixels of its neighbours; returns (tile, scene, core slice)."""
+        t = self.tile(key)
+        ts = self.config.tile_size
+        x0, y0 = max(0, int(t.window.col_off) - halo), max(0, int(t.window.row_off) - halo)
+        x1 = min(self.width, int(t.window.col_off) + ts + halo)
+        y1 = min(self.height, int(t.window.row_off) + ts + halo)
+        scene = load_sources(self._sources(key), Window(x0, y0, x1 - x0, y1 - y0))
+        oy, ox = int(t.window.row_off) - y0, int(t.window.col_off) - x0
+        return t, scene, (slice(oy, oy + ts), slice(ox, ox + ts))
+
+    def analytics(self) -> Optional[dict]:
+        p = self.folder / "products" / "analytics.json"
+        return json.loads(p.read_text()) if p.exists() else None
+
+    def analyze(self, n_clusters: int = 10, progress: Progress = _noop, log: Log = print,
+                samples_per_tile: int = 4000, seed: int = 0) -> dict:
+        """Mineral-alteration anomalies + targets, landslide susceptibility and spectral units.
+
+        Writes ``tiles/*/analytics.tif`` (band 1 alteration score+1, 2 dominant alteration type,
+        3 susceptibility class, 4 spectral unit, 5 unit confidence %, 6 surface code) and
+        ``products/analytics.json``, ``targets.geojson``, ``targets.csv``.
+        """
+        import joblib
+        from .analytics import (ALTERATION_INDICES, CLUSTER_PALETTE, HAZARD_CLASSES, RobustStats,
+                                alteration_indices, alteration_score, find_targets, fit_clusters,
+                                landslide_susceptibility, predict_clusters, spectral_features)
+        from .config import SNOW_CLASS, WATER_CLASS
+        st = self.state()["tiles"]
+        keys = [k for k in self.tile_keys if st.get(k, {}).get("acquired")]
+        if not keys:
+            raise ValueError("No acquired tiles - run data acquisition first")
+        self.build_vrts()
+        rng = np.random.default_rng(seed)
+        # pass 1: region-wide statistics and cluster model from a pixel sample
+        idx_s = {k: [] for k in ALTERATION_INDICES}
+        feat_s = []
+        for i, key in enumerate(keys):
+            progress(0.02 + 0.25 * i / len(keys), f"Sampling spectra: tile {key} ({i + 1}/{len(keys)})")
+            _t, scene, _sl = self._read_tile(key)
+            r, c = np.nonzero(scene.usable)
+            if len(r) < 50:
+                continue
+            take = rng.choice(len(r), min(samples_per_tile, len(r)), replace=False)
+            r, c = r[take], c[take]
+            ind = alteration_indices(scene.reflectance)
+            for k in ALTERATION_INDICES:
+                idx_s[k].append(ind[k][r, c])
+            feat_s.append(spectral_features(scene.reflectance)[:, r, c].T)
+        if not feat_s:
+            raise ValueError("No usable (snow-, cloud- and vegetation-free) pixels found")
+        stats = RobustStats.fit({k: np.concatenate(v) for k, v in idx_s.items()})
+        samples = np.concatenate(feat_s)
+        k = int(max(2, min(n_clusters, 16, len(samples) // 50)))
+        progress(0.3, f"Clustering {len(samples):,} pixels into {k} spectral units")
+        mean, std, km = fit_clusters(samples, k, seed)
+        adir = self.folder / "analytics"
+        adir.mkdir(exist_ok=True)
+        joblib.dump({"mean": mean, "std": std, "km": km, "stats": stats.to_dict()}, adir / "model.joblib")
+
+        # pass 2: per-tile products
+        px_km2 = (self.config.resolution / 1000) ** 2
+        targets: list[dict] = []
+        hz_counts = np.zeros(6, np.int64)
+        cl_n = np.zeros(k + 1, np.int64)
+        cl_refl = np.zeros((k + 1, 6))
+        cl_elev = np.zeros(k + 1)
+        for i, key in enumerate(keys):
+            progress(0.32 + 0.6 * i / len(keys), f"Analysing tile {key} ({i + 1}/{len(keys)})")
+            t, scene, sl = self._read_tile(key, halo=16)
+            usable = scene.usable
+            lc = scene.landcover if scene.landcover is not None else np.zeros(usable.shape, np.uint8)
+            # keep alteration away from snow / cloud / no-data edges (mixed pixels give false anomalies)
+            from scipy import ndimage as ndi
+            edge = ndi.binary_dilation((lc == SNOW_CLASS) | ~scene.valid, iterations=5)
+            score, dom = alteration_score(scene.reflectance, usable & ~edge, stats)
+            lith_h = np.zeros(usable.shape, np.uint8)
+            cpath = self.tile_dir(key) / "classified.tif"
+            if cpath.exists():
+                with rasterio.open(cpath) as src:
+                    lith_h[sl] = src.read(1)
+            has_dem = scene.dem is not None and np.isfinite(scene.dem).any()
+            if has_dem:
+                refl = np.nan_to_num(scene.reflectance)
+                ndvi = (refl[3] - refl[2]) / (refl[3] + refl[2] + 1e-6)
+                _idx, hz = landslide_susceptibility(scene.dem, self.config.resolution, lc == WATER_CLASS, ndvi,
+                                                    lith_h)
+                hz[~scene.valid | np.isin(lc, [SNOW_CLASS, WATER_CLASS])] = 0
+            else:
+                hz = np.zeros(usable.shape, np.uint8)
+            clusters, cconf = predict_clusters(spectral_features(scene.reflectance), usable, mean, std, km)
+            surface = np.where(scene.valid, lc, CLOUD_CLASS).astype(np.uint8)
+            inside = self.aoi_mask(t.info)
+            core = [a[sl] for a in (score, dom, hz, clusters, cconf, surface)]
+            score_c, dom_c, hz_c, cl_c, conf_c, surf_c = core
+            for a in core:
+                a[~inside] = 0
+            band1 = np.where(score_c > 0, np.round(score_c) + 1, 0).astype(np.uint8)
+            stack = np.stack([band1, dom_c, hz_c, cl_c, np.round(conf_c * 100).astype(np.uint8), surf_c])
+            write_raster(self.tile_dir(key) / "analytics.tif", stack.astype(np.uint8), t.info, nodata=0,
+                         descriptions=["alteration_score_plus1", "alteration_type", "landslide_class",
+                                       "spectral_unit", "unit_confidence", "surface_code"])
+            dem_c = scene.dem[sl] if has_dem else np.full(score_c.shape, np.nan, np.float32)
+            targets += [dict(tt, tile=key) for tt in
+                        find_targets(score_c, dom_c, t.info.transform, pixel_area_ha=px_km2 * 100,
+                                     extra={"elevation_m": dem_c, "lithology_id": lith_h[sl]})]
+            hz_counts += np.bincount(hz_c.ravel(), minlength=6)[:6]
+            cl_n += np.bincount(cl_c.ravel(), minlength=k + 1)[:k + 1]
+            refl_c = np.nan_to_num(scene.reflectance[:, sl[0], sl[1]])
+            for b in range(6):
+                cl_refl[:, b] += np.bincount(cl_c.ravel(), weights=refl_c[b].ravel(), minlength=k + 1)[:k + 1]
+            cl_elev += np.bincount(cl_c.ravel(), weights=np.nan_to_num(dem_c).ravel(), minlength=k + 1)[:k + 1]
+            self._update_tile(key, analysed=True)
+
+        progress(0.94, "Ranking exploration targets")
+        targets.sort(key=lambda t: -t["rank_score"])
+        targets = targets[:1000]
+        if targets:
+            lons, lats = warp_transform(self.crs, "EPSG:4326", [t["x"] for t in targets], [t["y"] for t in targets])
+            for n, (t, lo, la) in enumerate(zip(targets, lons, lats), start=1):
+                t.update(id=n, lon=round(lo, 6), lat=round(la, 6))
+                if t.get("lithology_id") in CLASS_IDS:
+                    t["lithology"] = class_name(t["lithology_id"])
+        out = self.folder / "products"
+        out.mkdir(exist_ok=True)
+        _write_targets(out, targets)
+        clusters_info = []
+        for c in range(1, k + 1):
+            n = int(cl_n[c])
+            clusters_info.append({"id": c, "color": CLUSTER_PALETTE[(c - 1) % len(CLUSTER_PALETTE)], "pixels": n,
+                                  "area_km2": round(n * px_km2, 2),
+                                  "spectrum": [round(v / n, 4) if n else 0 for v in cl_refl[c]],
+                                  "mean_elevation_m": round(cl_elev[c] / n, 0) if n else None, "class_id": None})
+        result = {"created": time.strftime("%Y-%m-%d %H:%M:%S"), "n_clusters": k, "stats": stats.to_dict(),
+                  "clusters": clusters_info,
+                  "hazard_km2": {str(c): round(float(hz_counts[c] * px_km2), 2) for c in HAZARD_CLASSES},
+                  "targets_total": len(targets), "top_target": targets[0] if targets else None,
+                  "targets_top": targets[:25]}
+        (out / "analytics.json").write_text(json.dumps(result, indent=2))
+        self._set(analysed_at=result["created"])
+        progress(1.0, f"Analytics complete: {len(targets)} alteration targets, {k} spectral units")
+        return result
+
+    def label_clusters(self, mapping: dict, progress: Progress = _noop, log: Log = print) -> dict:
+        """Turn spectral units into a lithology map: ``mapping`` = {unit id: rock class id}."""
+        mapping = {int(a): int(b) for a, b in mapping.items() if b and int(b) in CLASS_IDS}
+        if not mapping:
+            raise ValueError("Assign at least one spectral unit to a rock class")
+        info = self.analytics() or {}
+        lut = np.zeros(256, np.uint8)
+        for a, b in mapping.items():
+            lut[a] = b
+        keys = [k for k in self.tile_keys if (self.tile_dir(k) / "analytics.tif").exists()]
+        for i, key in enumerate(keys):
+            progress(i / max(1, len(keys)), f"Labelling tile {key}")
+            t = self.tile(key)
+            with rasterio.open(self.tile_dir(key) / "analytics.tif") as src:
+                cl, conf, surf = src.read(4), src.read(5), src.read(6)
+            lab = lut[cl]
+            masked = (cl == 0) & (surf > 0)
+            lab[masked] = surf[masked]
+            conf = np.where(np.isin(lab, CLASS_IDS), conf, 0).astype(np.uint8)
+            d = self.tile_dir(key)
+            write_raster(d / "classified.tif", lab[None], t.info, nodata=0, colormap=class_colormap())
+            write_raster(d / "confidence.tif", conf[None], t.info)
+            np.save(d / "counts.npy", np.bincount(lab.ravel(), minlength=256))
+            self._update_tile(key, classified=True, error=None, algorithm="units")
+        for c in info.get("clusters", []):
+            c["class_id"] = mapping.get(c["id"])
+        if info:
+            (self.folder / "products" / "analytics.json").write_text(json.dumps(info, indent=2))
+        self._set(model=None, algorithm="units", classified_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+        progress(1.0, "Lithology map created from labelled spectral units")
+        return self.summary()
+
+    def field_validation(self, observations: Sequence[dict]) -> dict:
+        """Compare field observations (lat, lon, class_id) with the current lithology map."""
+        from .evaluation import evaluate
+        rows, truth, pred = [], [], []
+        for o in observations:
+            q = self.query(float(o["lon"]), float(o["lat"]))
+            p = q.get("class_id")
+            ok = p in CLASS_IDS
+            rows.append({"id": o.get("id"), "observed": int(o["class_id"]), "predicted": p if ok else None,
+                         "match": bool(ok and p == int(o["class_id"]))})
+            if ok:
+                truth.append(int(o["class_id"]))
+                pred.append(p)
+        m = evaluate(np.asarray(truth), np.asarray(pred)) if truth else None
+        return {"points": rows, "n_compared": len(truth), "metrics": m}
+
+
 
 def _ring_area(geom: dict) -> float:
     total = 0.0
@@ -603,3 +803,16 @@ def region_legend() -> list[dict]:
 
 
 __all__ = ["Region", "RegionConfig", "load_geojson_geometry", "region_legend", "hex_to_rgb"]
+
+
+def _write_targets(out: Path, targets: list[dict]) -> None:
+    import csv
+    feats = [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [t["lon"], t["lat"]]},
+              "properties": {k: v for k, v in t.items() if k not in ("x", "y")}} for t in targets]
+    (out / "targets.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": feats}))
+    cols = ["id", "lat", "lon", "type_label", "mean_score", "peak_score", "area_ha", "elevation_m", "lithology", "tile"]
+    with open(out / "targets.csv", "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(cols)
+        for t in targets:
+            w.writerow([t.get(c, "") for c in cols])

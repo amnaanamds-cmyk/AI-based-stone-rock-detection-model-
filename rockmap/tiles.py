@@ -70,7 +70,7 @@ def _pick_level(path: Path, tile_px_m: float) -> int:
 
 def render_tile(mosaic: Path, layer: str, z: int, x: int, y: int) -> bytes:
     """PNG bytes of one XYZ tile of a region mosaic (transparent outside data)."""
-    categorical = layer in ("lithology", "surface")
+    categorical = layer in ("lithology", "surface", "hazard", "clusters", "alteration")
     rs = Resampling.nearest if categorical else Resampling.bilinear
     left, bottom, right, top = tile_bounds(z, x, y)
     full, _ = _open(mosaic, -1)
@@ -85,7 +85,9 @@ def render_tile(mosaic: Path, layer: str, z: int, x: int, y: int) -> bytes:
         with WarpedVRT(src, crs="EPSG:3857", transform=dst_transform, width=TILE, height=TILE,
                        resampling=rs, src_nodata=0, nodata=0) as vrt:
             data = vrt.read()
-    if categorical:
+    if layer in ("alteration", "hazard", "clusters"):
+        rgba = _analytics_rgba(layer, data[0])
+    elif categorical:
         rgba = colorize(data[0])
         rgba[data[0] == 0] = 0
         if layer == "surface":
@@ -107,6 +109,31 @@ def render_tile(mosaic: Path, layer: str, z: int, x: int, y: int) -> bytes:
     buf = io.BytesIO()
     Image.fromarray(rgba.astype(np.uint8), "RGBA").save(buf, "PNG", compress_level=6)
     return buf.getvalue()
+
+
+def _lut(colors: dict, alpha: int) -> np.ndarray:
+    lut = np.zeros((256, 4), np.uint8)
+    for k, c in colors.items():
+        c = c.lstrip("#")
+        lut[k] = (int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16), alpha)
+    return lut
+
+
+def _analytics_rgba(layer: str, v: np.ndarray) -> np.ndarray:
+    from .analytics import CLUSTER_PALETTE, HAZARD_CLASSES
+    if layer == "hazard":
+        return _lut({k: c for k, (_n, c) in HAZARD_CLASSES.items()}, 175)[v]
+    if layer == "clusters":
+        return _lut({i + 1: c for i, c in enumerate((CLUSTER_PALETTE * 16)[:255])}, 210)[v]
+    # alteration: score = v - 1; show anomalies >= 40 from yellow to deep red
+    score = v.astype(np.float32) - 1
+    t = np.clip((score - 40) / 60, 0, 1)
+    rgba = np.zeros((*v.shape, 4), np.uint8)
+    rgba[..., 0] = 255
+    rgba[..., 1] = (230 * (1 - t) + 20 * t).astype(np.uint8)
+    rgba[..., 2] = (60 * (1 - t)).astype(np.uint8)
+    rgba[..., 3] = np.where(score >= 40, 120 + 135 * t, 0).astype(np.uint8)
+    return rgba
 
 
 def cached_tile(cache_dir: Path, mosaic: Path, layer: str, z: int, x: int, y: int) -> bytes:

@@ -9,32 +9,37 @@ RockMap is a geological mapping platform that maps **surface rock types across w
 
 Final Year Project, Department of Computer Science, Government Degree College Zaim, Charsadda (Bacha Khan University Charsadda). Authors: **Aleena (Roll No 40)** and **Amna (Roll No 39)**.
 
-![region map](docs/images/region_gilgit.jpg)
-*Gilgit city region: a real cloud-free Sentinel-2 composite built automatically by RockMap, shown on the region map with its processing tiles.*
+![Gilgit analytics](docs/images/gilgit_hazard_targets.jpg)
+*Real data, Gilgit 40 × 40 km: landslide susceptibility with mineral-alteration targets (red dots), computed automatically from Sentinel-2 and the Copernicus DEM with no training data.*
+
+| Target zoom (iron-oxide anomaly) | Spectral units (name them → rock map) | Phone field app (offline) |
+|---|---|---|
+| ![](docs/images/gilgit_target_zoom.jpg) | ![](docs/images/gilgit_spectral_units.jpg) | ![](docs/images/field_app.jpg) |
+
+## Run it in one command
+
+| Windows | Linux / macOS |
+|---|---|
+| double-click **`run.bat`** (or `run.bat --real`) | **`./run.sh`** (or `./run.sh --real`) |
+
+The first run installs everything into `.venv`, builds a fully processed demo and opens **http://127.0.0.1:5000**. Sign in as **admin / rockmap-demo**. Add `--real` to also download and analyse a real 40 × 40 km area around Gilgit city from Sentinel-2. See **[docs/RUNNING.md](docs/RUNNING.md)** for manual installation, Docker, the phone field app and troubleshooting.
 
 ## What it does
 
 | Capability | Details |
 |---|---|
-| **Region-scale mapping** | Define an area (all of Gilgit-Baltistan, a preset valley, a rectangle you draw, or an uploaded boundary). It is cut into 20 km tiles and processed tile by tile. Every stage can be resumed, so an interrupted job continues where it stopped. |
-| **Automatic data acquisition** | Sentinel-2 L2A cloud-optimised GeoTIFFs and the Copernicus DEM are read from AWS Open Data, with no account or key needed. For each tile, a median composite of the least-cloudy late-summer scenes is built. Clouds and shadows are removed using the SCL layer, and steep slopes get topographic C-correction. |
-| **Mountain-aware masking** | Snow/glacier, water, dense vegetation and deep shadow are mapped as separate classes, so they are never mistaken for rock. |
-| **AI classification** | A fully convolutional CNN (PyTorch) is trained alongside Random Forest and SVM baselines. Train, validation and test sets are split by spatial blocks. The system reports accuracy, kappa, F1 and a confusion matrix for each model. |
-| **Training data** | Upload digitised geological maps (GeoJSON plus a table mapping map units to classes), or **draw training areas on the map** in the dashboard. |
-| **Products** | A seamless web map with a built-in tile server, GeoTIFF mosaics with overviews (open in QGIS/ArcGIS), GeoJSON polygons, area statistics per class and per district (CSV), a multi-page PDF report, and point queries (rock type, confidence, elevation). |
-| **Platform** | User accounts with roles (admin / analyst / viewer), CSRF protection, login lock-out, audit log, personal API tokens and a REST API. Background jobs are persistent, with progress, logs and cancel. Jobs can run in a separate worker process. Production serving uses waitress, and there is a Docker Compose setup. Leaflet is bundled, so the map works offline. |
-| **Single-scene mode** | Upload any Sentinel-2 or Landsat GeoTIFF, train on it and classify it. Large scenes are processed in blocks. |
-
-## Quick start
-
-```bash
-python -m venv .venv && source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install torch --index-url https://download.pytorch.org/whl/cpu   # CPU build (smaller)
-pip install -e ".[dev]"
-rockmap serve                  # http://127.0.0.1:5000
-```
-
-On first start, RockMap creates the user **admin**. Its password is printed in the console and saved in `data/initial_admin_password.txt`. Change it under *Profile* after signing in. You can also set `ROCKMAP_ADMIN_PASSWORD` before the first start.
+| **Region-scale mapping** | Map all of Gilgit-Baltistan, a preset valley, a rectangle you draw or an uploaded boundary. The area is cut into 20 km tiles that are processed one at a time, and interrupted runs pick up where they stopped. |
+| **Automatic data** | Sentinel-2 L2A and the Copernicus DEM come from AWS Open Data, with no account needed. Each tile gets a cloud-free median composite of late-summer scenes. Steep slopes get topographic correction. |
+| **Mountain-aware masking** | Snow, glaciers, water, dense vegetation and deep shadow are mapped as separate classes, never as rock. |
+| **AI rock-type mapping** | A CNN is trained alongside Random Forest and SVM. Train and test sets are split by spatial blocks. Each model reports accuracy, kappa, F1 and a confusion matrix. |
+| **Mineral prospectivity** *(new)* | Region-wide anomalies in clay, iron-oxide and ferrous band ratios are mapped, then turned into a **ranked list of exploration targets** with coordinates. Download as CSV or GeoJSON, or view on the map. |
+| **Landslide / rockfall susceptibility** *(new)* | A five-class hazard map built from slope, relief, river undercutting, rock strength and bare ground, with km² per class. |
+| **Rock map without training data** *(new)* | The area is grouped into spectral units automatically. A geologist names them, and they become a lithology map in one click. |
+| **Field app** *(new)* | A phone page that works offline: GPS, photo, rock type and certainty. Observations become training data and **validate the map** by measuring agreement. |
+| **Key findings** *(new)* | A plain-language executive summary appears on the dashboard and in the PDF report. |
+| **Client sharing** *(new)* | Public read-only links show maps, findings and targets without a login. |
+| **Products** | Web map, GeoTIFF mosaics with **QGIS style files** *(new)*, GeoJSON polygons, district statistics as CSV, a multi-page PDF report, point queries and a REST API. |
+| **Platform** | Admin / analyst / viewer roles, CSRF protection, login lock-out, audit log, API tokens, a persistent job queue with a worker process, Docker Compose, and maps that work offline. |
 
 ### Mapping Gilgit-Baltistan (dashboard)
 1. **Regions → New region**: start with a preset such as *Gilgit city*, *Hunza*, *Skardu* or *Astore*, or choose *Gilgit-Baltistan (whole region)*, which is about 190 tiles.
@@ -70,6 +75,8 @@ The software is complete, but no machine can know the geology of Gilgit-Baltista
 The built-in Gilgit-Baltistan outline is an **approximate** processing extent (about 72,150 km² against the official 72,971 km²). For administrative work, upload an official boundary.
 
 ## Documentation
+* [docs/RUNNING.md](docs/RUNNING.md): **how to install and run** (one command, manual, Docker, phone app)
+* [docs/PITCH.md](docs/PITCH.md): competition pitch and 7-minute demo script
 * [docs/GILGIT_BALTISTAN.md](docs/GILGIT_BALTISTAN.md): step-by-step guide for mapping GB, data volumes and timings
 * [docs/USER_MANUAL.md](docs/USER_MANUAL.md): dashboard and command-line manual
 * [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): server installation, Docker, HTTPS, backups, users, REST API
@@ -89,7 +96,7 @@ The built-in Gilgit-Baltistan outline is an **approximate** processing extent (a
 
 ## Tests
 ```bash
-pytest                                  # 50 tests (web platform, region engine, acquisition logic, ML pipeline)
+pytest                                  # 57 tests (web platform, analytics, region engine, acquisition, ML pipeline)
 ROCKMAP_NETWORK_TESTS=1 pytest          # plus a live download of Sentinel-2 + DEM near Gilgit
 ```
 

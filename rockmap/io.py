@@ -83,13 +83,15 @@ def write_raster(path: str | Path, data: np.ndarray, info: GeoInfo, nodata=None,
         profile["crs"] = info.crs
     if nodata is not None:
         profile["nodata"] = nodata
+    if colormap and data.shape[0] == 1 and data.dtype == np.uint8:
+        profile["photometric"] = "palette"
     with rasterio.open(path, "w", **profile) as dst:
+        if colormap:
+            dst.write_colormap(1, colormap)   # before the pixels, so the TIFF photometric tag can be set
         dst.write(data)
         if descriptions:
             for i, d in enumerate(descriptions, start=1):
                 dst.set_band_description(i, d)
-        if colormap:
-            dst.write_colormap(1, colormap)
     return path
 
 

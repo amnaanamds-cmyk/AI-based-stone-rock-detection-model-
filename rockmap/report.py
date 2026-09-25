@@ -36,7 +36,8 @@ def _table(ax, rows, header, col_widths=None, fontsize=8.5):
 
 
 def region_report(region, out_path, model_meta: Optional[dict] = None, stats: Optional[dict] = None,
-                  organisation: str = "") -> Path:
+                  organisation: str = "", analytics: Optional[dict] = None,
+                  validation: Optional[dict] = None) -> Path:
     """Multi-page PDF: map, area statistics, district table, model accuracy, data & method."""
     import rasterio
     from matplotlib.backends.backend_pdf import PdfPages
@@ -96,7 +97,26 @@ def region_report(region, out_path, model_meta: Optional[dict] = None, stats: Op
         pdf.savefig(fig)
         plt.close(fig)
 
-        # --- page 2: statistics ------------------------------------------------------
+        # --- page 2: executive summary ----------------------------------------------
+        from .analytics import insights
+        found = insights(stats, analytics)
+        if found:
+            fig = plt.figure(figsize=(8.27, 11.69))
+            fig.suptitle("Executive summary", fontsize=15, weight="bold", x=0.06, ha="left", y=0.97)
+            y = 0.9
+            for line in found:
+                wrapped = textwrap.fill(line, 88)
+                fig.text(0.06, y, "\u2022  " + wrapped.replace("\n", "\n    "), fontsize=10.5, va="top")
+                y -= 0.03 * (wrapped.count("\n") + 1) + 0.02
+            if validation and validation.get("metrics"):
+                m = validation["metrics"]
+                fig.text(0.06, y - 0.02, f"Field validation: {validation['n_compared']} observations, "
+                         f"agreement {m['overall_accuracy'] * 100:.1f}%, kappa {m['kappa']:.2f}.",
+                         fontsize=10.5, va="top", weight="bold")
+            pdf.savefig(fig)
+            plt.close(fig)
+
+        # --- page 2b: statistics -----------------------------------------------------
         fig = plt.figure(figsize=(8.27, 11.69))
         fig.suptitle("Area statistics", fontsize=15, weight="bold", x=0.06, ha="left", y=0.97)
         rock = [r for r in stats["region"] if r["id"] in CLASS_IDS]
@@ -155,6 +175,39 @@ def region_report(region, out_path, model_meta: Optional[dict] = None, stats: Op
                 f"Training pixels: {model_meta.get('n_train', 0):,}; validation {model_meta.get('n_val', 0):,}; "
                 f"test {model_meta.get('n_test', 0):,}. Features: {', '.join(model_meta.get('feature_names', []))}.",
                 110), fontsize=8)
+            pdf.savefig(fig)
+            plt.close(fig)
+
+        # --- page 4b: analytics -------------------------------------------------------
+        if analytics:
+            from .analytics import HAZARD_CLASSES
+            fig = plt.figure(figsize=(8.27, 11.69))
+            fig.suptitle("Mineral alteration targets & landslide susceptibility", fontsize=14, weight="bold",
+                         x=0.06, ha="left", y=0.97)
+            tg = analytics.get("targets_top", [])[:15]
+            ax = fig.add_axes([0.06, 0.5, 0.88, 0.42])
+            if tg:
+                rows = [[t["id"], f"{t['lat']:.5f}", f"{t['lon']:.5f}", t["type_label"].split(" (")[0],
+                         f"{t['mean_score']:.0f}", f"{t['area_ha']:.1f}", f"{t.get('elevation_m', 0):.0f}"] for t in tg]
+                _table(ax, rows, ["#", "Lat", "Lon", "Anomaly", "Score", "ha", "Elev m"],
+                       [0.06, 0.16, 0.16, 0.26, 0.1, 0.1, 0.12], fontsize=8)
+            else:
+                ax.axis("off")
+                ax.text(0, 0.9, "No alteration anomalies above the threshold.", fontsize=10)
+            fig.text(0.06, 0.47, textwrap.fill(
+                f"{analytics.get('targets_total', 0)} anomalies in total (full list in targets.csv). Scores are "
+                "robust region-wide anomalies of Sentinel-2 clay (SWIR1/SWIR2), iron-oxide (red/blue) and "
+                "ferrous ratios on snow-, vegetation- and shadow-free ground. They are screening targets for "
+                "field checks, not proven mineralisation.", 100), fontsize=8, va="top", color="#444")
+            hz = analytics.get("hazard_km2") or {}
+            if sum(hz.values()):
+                ax = fig.add_axes([0.25, 0.1, 0.65, 0.25])
+                names = [HAZARD_CLASSES[int(k)][0] for k in sorted(hz)]
+                ax.barh(names, [hz[k] for k in sorted(hz)], color=[HAZARD_CLASSES[int(k)][1] for k in sorted(hz)],
+                        edgecolor="#333")
+                ax.set_xlabel("km2")
+                ax.set_title("Landslide / rockfall susceptibility (indicative)", fontsize=10)
+                ax.spines[["top", "right"]].set_visible(False)
             pdf.savefig(fig)
             plt.close(fig)
 

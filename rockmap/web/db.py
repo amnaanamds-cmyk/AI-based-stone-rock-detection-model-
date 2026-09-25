@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS regions (
     folder      TEXT NOT NULL,
     preset      TEXT,
     bounds      TEXT,
+    share_token TEXT,
     created_by  TEXT,
     created     TEXT NOT NULL
 );
@@ -91,6 +92,20 @@ CREATE TABLE IF NOT EXISTS annotations (
     author    TEXT,
     created   TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS observations (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    region_id   INTEGER,
+    lat         REAL NOT NULL,
+    lon         REAL NOT NULL,
+    accuracy_m  REAL,
+    class_id    INTEGER NOT NULL,
+    certainty   INTEGER NOT NULL DEFAULT 2,
+    note        TEXT,
+    photo       TEXT,
+    observed_at TEXT,
+    author      TEXT,
+    created     TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS audit (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT,
@@ -101,11 +116,13 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS ann_region ON annotations(region_id);
+CREATE INDEX IF NOT EXISTS obs_region ON observations(region_id);
 """
 
 # columns added after v1.0 (databases created by older versions are migrated in place)
 MIGRATIONS = {
     "scenes": {"created_by": "TEXT"},
+    "regions": {"share_token": "TEXT"},
     "models": {"region_id": "INTEGER", "created_by": "TEXT"},
     "jobs": {"region_id": "INTEGER", "user": "TEXT", "worker": "TEXT", "cancel": "INTEGER NOT NULL DEFAULT 0",
              "attempts": "INTEGER NOT NULL DEFAULT 0", "heartbeat": "REAL", "started": "TEXT"},

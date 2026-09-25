@@ -22,6 +22,7 @@
     <a href="{{ url_for('regions.regions_page') }}" class="{{ 'active' if ep.startswith('regions.') }}">Regions</a>
     <a href="{{ url_for('upload') }}" class="{{ 'active' if ep in ('upload', 'scene_page') }}">Scenes</a>
     <a href="{{ url_for('models_page') }}" class="{{ 'active' if ep in ('models_page', 'model_page') }}">Models</a>
+    <a href="{{ url_for('field.field_page') }}" class="{{ 'active' if ep.startswith('field.') }}">Field</a>
     <a href="{{ url_for('jobs_page') }}" class="{{ 'active' if ep in ('jobs_page', 'job_page') }}">Jobs</a>
     {% if has_role('admin') %}<a href="{{ url_for('admin_users') }}" class="{{ 'active' if ep.startswith('admin') }}">Admin</a>{% endif %}
     <a href="{{ url_for('about') }}" class="{{ 'active' if ep == 'about' }}">About</a>

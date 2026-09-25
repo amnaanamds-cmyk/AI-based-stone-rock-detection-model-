@@ -123,7 +123,12 @@ def cmd_demo(a):
 def cmd_serve(a):
     from .web.app import create_app
     app = create_app(Path(a.data) if a.data else None, workers=a.workers)
-    print(f"RockMap dashboard on http://{a.host}:{a.port}  (data folder: {app.config['DATA_DIR']})", flush=True)
+    url = f"http://{'127.0.0.1' if a.host in ('0.0.0.0', '::') else a.host}:{a.port}"
+    print(f"RockMap dashboard on {url}  (data folder: {app.config['DATA_DIR']})", flush=True)
+    if getattr(a, "open", False):
+        import threading
+        import webbrowser
+        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
     if a.debug:
         app.run(host=a.host, port=a.port, debug=True, threaded=True)
         return
@@ -233,6 +238,34 @@ def cmd_region_status(a):
     print(json.dumps({"name": r.config.name, **r.summary()}, indent=2))
 
 
+def cmd_region_analyze(a):
+    res = _region(a).analyze(a.units, _progress)
+    print(f"\n{res['targets_total']} alteration targets, {len(res['clusters'])} spectral units")
+    for t in res["targets_top"][:10]:
+        print(f"  #{t['id']:<4d} {t['lat']:.5f}N {t['lon']:.5f}E  {t['type_label']:38s} score {t['mean_score']:5.1f}  "
+              f"{t['area_ha']:6.1f} ha")
+    from .analytics import HAZARD_CLASSES
+    print("Landslide susceptibility (km2): " + ", ".join(
+        f"{HAZARD_CLASSES[int(k)][0]} {v:,.1f}" for k, v in res["hazard_km2"].items()))
+
+
+def cmd_region_label_units(a):
+    mapping = dict(pair.split("=") for pair in a.assign)
+    print(_region(a).label_clusters(mapping, _progress))
+
+
+def cmd_quickstart(a):
+    """Build a complete demo (synthetic region with every product) and start the dashboard."""
+    from .quickstart import build_demo
+    root = Path(a.data or os.environ.get("ROCKMAP_DATA_DIR", "data"))
+    os.environ["ROCKMAP_DATA_DIR"] = str(root)
+    build_demo(root, real=a.real, progress=_progress)
+    if a.no_serve:
+        return
+    a.host, a.data, a.workers, a.http_threads, a.debug = a.host, str(root), None, 8, False
+    cmd_serve(a)
+
+
 def cmd_create_user(a):
     import getpass
     from .web.auth import create_user
@@ -337,7 +370,18 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--workers", type=int, default=None,
                    help="background job threads in this process (0 = use a separate 'rockmap worker')")
     s.add_argument("--http-threads", type=int, default=8)
+    s.add_argument("--open", action="store_true", help="open the dashboard in the web browser")
     s.set_defaults(func=cmd_serve)
+
+    s = sub.add_parser("quickstart", help="build a complete demo (all features) and start the dashboard")
+    s.add_argument("--data", help="data folder (default ./data)")
+    s.add_argument("--real", action="store_true",
+                   help="also download a real 40 x 40 km Gilgit region from Sentinel-2 (needs internet, ~5-10 min)")
+    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--port", type=int, default=5000)
+    s.add_argument("--no-serve", action="store_true", help="only build the demo data")
+    s.add_argument("--no-open", dest="open", action="store_false", help="do not open the browser")
+    s.set_defaults(func=cmd_quickstart, open=True)
 
     s = sub.add_parser("worker", help="run background jobs (separate process from the web server)")
     s.add_argument("--data")
@@ -398,6 +442,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--algorithm", choices=ALGORITHMS)
     s.add_argument("--smoothing", type=int, default=3)
     s.add_argument("--tiles", nargs="+")
+    s = rarg("analyze", "mineral-alteration targets, landslide susceptibility, spectral units", cmd_region_analyze)
+    s.add_argument("--units", type=int, default=10, help="number of spectral units (2-16)")
+    s = rarg("label-units", "turn spectral units into a lithology map", cmd_region_label_units)
+    s.add_argument("assign", nargs="+", help="UNIT=CLASS pairs, e.g. 1=4 2=7 3=6")
     s = rarg("mosaic", "build region-wide GeoTIFF mosaics with overviews", cmd_region_mosaic)
     s = rarg("stats", "area statistics (optionally per district)", cmd_region_stats)
     s.add_argument("--districts", help="district boundaries GeoJSON")
