@@ -6,6 +6,8 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage
 
+from .config import ELEVATION_SCALE_M
+
 EPS = 1e-6
 
 BAND_FEATURES = ["blue", "green", "red", "nir", "swir1", "swir2"]
@@ -52,7 +54,7 @@ def terrain_features(dem: np.ndarray, pixel_size: float = 20.0,
     hill = (np.sin(alt) * np.cos(slope) +
             np.cos(alt) * np.sin(slope) * np.cos(az - aspect))
     rough = dem - ndimage.uniform_filter(dem, size=5)             # local relief (TPI-like)
-    elev = (dem - np.mean(dem)) / (np.std(dem) + EPS)             # scene-normalised elevation
+    elev = dem / ELEVATION_SCALE_M                                 # absolute elevation (km)
     return np.stack([
         elev,
         np.degrees(slope) / 90.0,

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Users{% endblock %}
+{% block content %}
+<div class="row"><h1>Users</h1><span class="spacer"></span><a class="btn small ghost" href="{{ url_for('admin_audit') }}">Audit log</a></div>
+<p class="sub"><b>viewer</b>: view maps and download · <b>analyst</b>: + upload data, draw training areas, run jobs · <b>admin</b>: + manage users, delete data, server-side files</p>
+<div class="grid side">
+  <div class="card"><div class="table-wrap"><table>
+    <tr><th>User</th><th>Role</th><th>Status</th><th>Last sign-in</th><th>Actions</th></tr>
+    {% for u in users %}
+    <tr>
+      <td><b>{{ u.username }}</b></td>
+      <td><form class="inline" method="post">{{ csrf_field() }}<input type="hidden" name="action" value="role"><input type="hidden" name="user_id" value="{{ u.id }}">
+        <select name="role" onchange="this.form.submit()" {{ 'disabled' if u.id == current_user.id }} style="width: auto">{% for r in roles %}<option {{ 'selected' if r == u.role }}>{{ r }}</option>{% endfor %}</select></form></td>
+      <td>{{ 'active' if u.active else 'disabled' }}</td>
+      <td class="muted">{{ u.last_login or '-' }}</td>
+      <td class="row" style="gap: 6px">
+        {% if u.id != current_user.id %}
+        <form class="inline" method="post">{{ csrf_field() }}<input type="hidden" name="user_id" value="{{ u.id }}"><input type="hidden" name="action" value="{{ 'deactivate' if u.active else 'activate' }}"><button class="btn small {{ 'danger' if u.active else 'ghost' }}">{{ 'Disable' if u.active else 'Enable' }}</button></form>
+        {% endif %}
+        <form class="inline row" style="gap: 4px" method="post">{{ csrf_field() }}<input type="hidden" name="user_id" value="{{ u.id }}"><input type="hidden" name="action" value="reset"><input type="password" name="password" placeholder="new password" minlength="8" style="width: 130px" required><button class="btn small ghost">Reset</button></form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table></div></div>
+  <form class="card" method="post">{{ csrf_field() }}
+    <h2>Add user</h2>
+    <input type="hidden" name="action" value="create">
+    <label for="username">Username</label><input type="text" id="username" name="username" required maxlength="64">
+    <label for="password">Initial password (min. 8)</label><input type="password" id="password" name="password" required minlength="8">
+    <label for="role">Role</label><select id="role" name="role">{% for r in roles %}<option {{ 'selected' if r == 'analyst' }}>{{ r }}</option>{% endfor %}</select>
+    <p style="margin-top: 16px"><button class="btn">Create user</button></p>
+  </form>
+</div>
+{% endblock %}

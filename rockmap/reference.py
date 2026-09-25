@@ -60,3 +60,23 @@ def rasterize_reference(vector_path, scene_path, out_path, field: str,
         print(f"warning: {len(unmapped)} attribute values were not mapped and left unlabelled: "
               f"{sorted(map(str, unmapped))[:10]}")
     return write_raster(out_path, labels[None].astype(np.uint8), info, nodata=0, colormap=class_colormap())
+
+
+def load_reference_features(vector_path, field: str = "class_id", mapping: Optional[dict] = None) -> list[tuple]:
+    """Read a geological map / training polygons as [(geometry in EPSG:4326, class id)]."""
+    feats, src_crs = _read_features(Path(vector_path))
+    out = []
+    for f in feats:
+        value = (f.get("properties") or {}).get(field)
+        cid = mapping.get(str(value)) if mapping else value
+        try:
+            cid = int(cid)
+        except (TypeError, ValueError):
+            continue
+        if cid not in CLASS_BY_ID:
+            continue
+        geom = f["geometry"]
+        if src_crs and src_crs not in ("EPSG:4326", "urn:ogc:def:crs:OGC:1.3:CRS84", "OGC:CRS84"):
+            geom = transform_geom(src_crs, "EPSG:4326", geom)
+        out.append((geom, cid))
+    return out

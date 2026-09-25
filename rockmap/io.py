@@ -12,7 +12,7 @@ from rasterio.transform import Affine
 from rasterio.warp import reproject, transform_bounds
 from rasterio.windows import Window
 
-from .config import CLASS_BY_ID, CLOUD_CLASS, hex_to_rgb
+from .config import ALL_CLASSES, CLOUD_CLASS, hex_to_rgb
 
 
 @dataclass
@@ -94,9 +94,10 @@ def write_raster(path: str | Path, data: np.ndarray, info: GeoInfo, nodata=None,
 
 
 def class_colormap() -> dict[int, tuple[int, int, int, int]]:
-    cmap = {0: (0, 0, 0, 0), CLOUD_CLASS: (255, 255, 255, 0)}
-    for cid, c in CLASS_BY_ID.items():
+    cmap = {i: (0, 0, 0, 0) for i in range(256)}
+    for cid, c in ALL_CLASSES.items():
         cmap[cid] = (*hex_to_rgb(c.color), 255)
+    cmap[CLOUD_CLASS] = (255, 255, 255, 0)
     return cmap
 
 
@@ -105,6 +106,22 @@ def align_to(src_path: str | Path, ref: GeoInfo, resampling: Resampling = Resamp
     """Reproject/resample one band of ``src_path`` onto the grid described by ``ref``."""
     out = np.full((ref.height, ref.width), np.nan, dtype=np.float32)
     with rasterio.open(src_path) as src:
+        # fast path: same CRS and pixel grid -> plain (boundless) windowed read, no resampling
+        if (ref.crs is not None and src.crs == ref.crs
+                and np.allclose([src.transform.a, src.transform.e], [ref.transform.a, ref.transform.e])):
+            col = (ref.transform.c - src.transform.c) / src.transform.a
+            row = (ref.transform.f - src.transform.f) / src.transform.e
+            if abs(col - round(col)) < 1e-6 and abs(row - round(row)) < 1e-6:
+                win = Window(int(round(col)), int(round(row)), ref.width, ref.height)
+                nodata = src.nodata
+                data = src.read(band, window=win, boundless=True,
+                                fill_value=nodata if nodata is not None else 0).astype(np.float32)
+                if nodata is not None and not np.isnan(nodata):
+                    data[data == nodata] = np.nan
+                inside = Window(0, 0, src.width, src.height)
+                if not rasterio.windows.intersect([win, inside]):
+                    data[:] = np.nan
+                return data
         if ref.crs is None or src.crs is None:
             # Not georeferenced: fall back to plain resampling of the whole raster.
             data = src.read(band, out_shape=(ref.height, ref.width), resampling=resampling)

@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status %}
+{% block title %}{{ cfg.name }}{% endblock %}
+{% block mainclass %}wide{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
+<script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
+{% endblock %}
+{% block content %}
+<div class="row" style="margin-bottom: 10px">
+  <div><h1>{{ cfg.name }}</h1>
+  <p class="sub" style="margin: 0">{{ summary.tiles }} tiles · {{ '{:,.0f}'.format(summary.area_km2) }} km² grid · {{ cfg.resolution|int }} m · EPSG:{{ cfg.epsg }} ·
+    {% if cfg.source == 'sentinel2' %}Sentinel-2 {{ cfg.years|min }}–{{ cfg.years|max }}, months {{ cfg.months|join(',') }}{% else %}server files{% endif %}</p></div>
+  <span class="spacer"></span>
+  {% if has_role('admin') %}<form class="inline" method="post" action="{{ url_for('regions.region_delete', region_id=row.id) }}" onsubmit="return confirm('Delete this region and all its data?')">{{ csrf_field() }}<button class="btn small danger">Delete region</button></form>{% endif %}
+</div>
+
+<div class="region-layout">
+  <div class="card map-card">
+    <div id="region-map" data-region="{{ row.id }}"
+         data-tiles-api="{{ url_for('regions.api_region_tiles', region_id=row.id) }}"
+         data-query-api="{{ url_for('regions.api_region_query', region_id=row.id) }}"
+         data-ann-api="{{ url_for('regions.api_annotations', region_id=row.id) }}"
+         data-tile-url="{{ url_for('regions.tile', region_id=row.id, layer='LAYER', z=0, x=0, y=0)|replace('/0/0/0.png', '/{z}/{x}/{y}.png') }}?v={{ version }}"
+         data-layers="{{ layers|tojson|forceescape }}"
+         data-can-edit="{{ 1 if has_role('analyst') else 0 }}"
+         data-classes="{{ classes|tojson|forceescape }}"></div>
+    <div class="map-tools row">
+      <label class="check" style="margin: 0">Lithology opacity <input type="range" min="0" max="100" value="80" id="lith-opacity"></label>
+      <span class="spacer"></span>
+      {% if has_role('analyst') %}
+      <select id="draw-class" style="width: auto">{% for c in classes %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select>
+      <button type="button" class="btn small" id="draw-btn">Draw training area</button>
+      <button type="button" class="btn small ghost" id="draw-finish" hidden>Finish</button>
+      <button type="button" class="btn small ghost" id="draw-cancel" hidden>Cancel</button>
+      {% endif %}
+    </div>
+    <p class="hint" id="map-hint">Click the map to see the rock type, confidence and elevation at that point. Tile colours show progress: <span class="swatch" style="background:#9aa0a6"></span>pending <span class="swatch" style="background:#e0a458"></span>imagery ready <span class="swatch" style="background:#2e7d32"></span>classified <span class="swatch" style="background:#c62828"></span>error.</p>
+  </div>
+
+  <div class="side-panel">
+    <div class="card" id="jobs-card" data-active="{{ active|map(attribute='id')|list|tojson }}">
+      <h2>Status</h2>
+      <div class="grid" style="grid-template-columns: repeat(3, 1fr); gap: 8px">
+        <div><div class="stat">{{ summary.acquired }}<span class="muted" style="font-size: 14px">/{{ summary.tiles }}</span></div><div class="stat-label">imagery tiles</div></div>
+        <div><div class="stat">{{ summary.classified }}</div><div class="stat-label">classified</div></div>
+        <div><div class="stat" style="color: {{ 'var(--err)' if summary.failed else 'inherit' }}">{{ summary.failed }}</div><div class="stat-label">errors</div></div>
+      </div>
+      {% for j in active %}
+      <div class="job-live" data-job="{{ j.id }}" data-api="{{ url_for('api_job', job_id=j.id) }}">
+        <div class="row"><b>#{{ j.id }} {{ j.kind.replace('region_', '') }}</b> {{ status(j.status) }}<span class="spacer"></span>
+        {% if has_role('analyst') %}<form class="inline" method="post" action="{{ url_for('cancel_job', job_id=j.id) }}">{{ csrf_field() }}<button class="btn small danger">Cancel</button></form>{% endif %}</div>
+        <div class="progress"><span style="width: {{ (j.progress * 100)|round|int }}%"></span></div>
+        <p class="msg muted mono">{{ j.message }}</p>
+      </div>
+      {% endfor %}
+      {% set last = jobs[0] if jobs else none %}
+      {% if last and last.status == 'failed' %}<div class="flash error" style="margin: 10px 0 0">Last job #{{ last.id }} failed: {{ last.error }} <a href="{{ url_for('job_page', job_id=last.id) }}">log</a></div>{% endif %}
+      {% if state.model %}<p class="hint">Current map: {{ algorithm_labels.get(state.algorithm, state.algorithm) }} · classified {{ state.classified_at }}</p>{% endif %}
+    </div>
+
+    {% if has_role('analyst') %}
+    <div class="card">
+      <h2>Workflow</h2>
+      <p class="hint">Scope: <label class="check" style="display: inline-flex; margin: 0"><input type="checkbox" id="scope-view"> only tiles visible on the map</label></p>
+      <details {{ 'open' if summary.acquired < summary.tiles }}>
+        <summary><b>1 · Acquire imagery & DEM</b> <span class="muted">({{ summary.acquired }}/{{ summary.tiles }})</span></summary>
+        <form method="post" action="{{ url_for('regions.region_run', region_id=row.id) }}" class="stage-form">{{ csrf_field() }}
+          <input type="hidden" name="stage" value="acquire"><input type="hidden" name="tiles" class="tiles-input">
+          <p class="hint">Builds cloud-free Sentinel-2 composites and downloads the Copernicus DEM for each tile. Finished tiles are skipped.</p>
+          <label class="check"><input type="checkbox" name="force"> re-acquire finished tiles</label>
+          <button class="btn small">Start acquisition</button>
+        </form>
+      </details>
+      <details>
+        <summary><b>2 · Training data & model</b> <span class="muted">({{ counts.reference_files }} maps, {{ counts.drawn_areas }} drawn areas)</span></summary>
+        <p class="hint">Upload a digitised geological map (GeoJSON) and/or draw training areas on the map with the tool below the map.</p>
+        {% for r in refs %}
+          <div class="row" style="margin: 4px 0"><span class="mono">{{ r.name }}</span> <span class="muted">{{ r.polygons }} polygons, field {{ r.field }}</span><span class="spacer"></span>
+          <form class="inline" method="post" action="{{ url_for('regions.region_reference_delete', region_id=row.id, idx=loop.index0) }}">{{ csrf_field() }}<button class="btn small danger">✕</button></form></div>
+        {% endfor %}
+        <form method="post" enctype="multipart/form-data" action="{{ url_for('regions.region_reference', region_id=row.id) }}">{{ csrf_field() }}
+          <label>Geological map (GeoJSON)</label><input type="file" name="file" accept=".geojson,.json" required>
+          <label>Lithology attribute</label><input type="text" name="field" value="class_id">
+          <label>Unit → class mapping (JSON, optional)</label><textarea name="mapping" rows="3" placeholder='{"Karakoram Batholith": 4, "Chilas Complex": 5, "Quaternary": 7}'></textarea>
+          <button class="btn small ghost" style="margin-top: 8px">Add reference map</button>
+        </form>
+        <hr>
+        <form method="post" action="{{ url_for('regions.region_run', region_id=row.id) }}">{{ csrf_field() }}
+          <input type="hidden" name="stage" value="train">
+          <label>Model name</label><input type="text" name="model_name" placeholder="{{ cfg.name }} model">
+          <div class="row" style="gap: 12px">{% for a in algorithms %}<label class="check"><input type="checkbox" name="algorithms" value="{{ a }}" checked> {{ a|upper }}</label>{% endfor %}</div>
+          <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 8px">
+            <div><label>CNN epochs</label><input type="number" name="epochs" value="30" min="1" max="200"></div>
+            <div><label>Samples / class</label><input type="number" name="samples" value="4000" min="200" step="100"></div>
+          </div>
+          <button class="btn small" style="margin-top: 8px" {{ 'disabled' if not summary.acquired }}>Train model</button>
+        </form>
+      </details>
+      <details {{ 'open' if summary.acquired and not summary.classified }}>
+        <summary><b>3 · Classify</b> <span class="muted">({{ summary.classified }}/{{ summary.tiles }})</span></summary>
+        <form method="post" action="{{ url_for('regions.region_run', region_id=row.id) }}" class="stage-form">{{ csrf_field() }}
+          <input type="hidden" name="stage" value="classify"><input type="hidden" name="tiles" class="tiles-input">
+          <label>Model</label>
+          <select name="model_id" required>{% for m in models %}<option value="{{ m.id }}">{{ m.name }}{{ ' (this region)' if m.region_id == row.id }} — {{ algorithm_labels[m.best_algo] }} κ {{ '%.2f' % m.summary[m.best_algo].kappa }}</option>{% else %}<option value="">no models yet</option>{% endfor %}</select>
+          <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 8px">
+            <div><label>Algorithm</label><select name="algorithm"><option value="">best</option>{% for a in algorithms %}<option value="{{ a }}">{{ a|upper }}</option>{% endfor %}</select></div>
+            <div><label>Smoothing</label><select name="smoothing"><option value="1">none</option><option value="3" selected>3×3</option><option value="5">5×5</option></select></div>
+          </div>
+          <button class="btn small" style="margin-top: 8px" {{ 'disabled' if not models or not summary.acquired }}>Classify</button>
+        </form>
+      </details>
+      <details>
+        <summary><b>4 · Build products</b></summary>
+        <form method="post" action="{{ url_for('regions.region_run', region_id=row.id) }}">{{ csrf_field() }}
+          <input type="hidden" name="stage" value="products">
+          <p class="hint">Seamless map mosaics (web map + GeoTIFF), area statistics (per district if uploaded), polygons and the PDF report.</p>
+          <label class="check"><input type="checkbox" name="geojson" checked> export GeoJSON polygons</label>
+          <label>Minimum patch (pixels)</label><input type="number" name="min_pixels" value="25" min="1">
+          <button class="btn small" style="margin-top: 8px" {{ 'disabled' if not summary.acquired }}>Build products</button>
+        </form>
+        <hr>
+        <form method="post" enctype="multipart/form-data" action="{{ url_for('regions.region_districts', region_id=row.id) }}">{{ csrf_field() }}
+          <label>District boundaries (GeoJSON){{ ' — uploaded' if districts }}</label><input type="file" name="file" accept=".geojson,.json" required>
+          <label>Name attribute</label><input type="text" name="field" value="name">
+          <button class="btn small ghost" style="margin-top: 8px">Upload districts</button>
+        </form>
+      </details>
+      <details>
+        <summary><b>Run everything</b></summary>
+        <form method="post" action="{{ url_for('regions.region_run', region_id=row.id) }}" class="stage-form">{{ csrf_field() }}
+          <input type="hidden" name="stage" value="pipeline"><input type="hidden" name="tiles" class="tiles-input">
+          <p class="hint">Acquire → train (unless a model is chosen) → classify → products.</p>
+          <label>Model</label><select name="model_id"><option value="">train a new model from the training data</option>{% for m in models %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}</select>
+          <button class="btn small" style="margin-top: 8px">Run pipeline</button>
+        </form>
+      </details>
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <div class="row"><h2 style="margin: 0">Area statistics</h2><span class="spacer"></span>{% if stats %}<a class="btn small ghost" href="{{ url_for('regions.region_stats_csv', region_id=row.id) }}">CSV</a>{% endif %}</div>
+      {% if stats %}
+      <table style="margin-top: 8px">
+        <tr><th>Class</th><th class="num">km²</th><th class="num">% rock</th></tr>
+        {% for s in stats.region if s.pixels %}
+        <tr><td><span class="swatch" style="background: {{ s.color }}"></span>{{ s.name }}</td><td class="num">{{ '{:,.1f}'.format(s.area_km2) }}</td><td class="num">{{ '%.1f' % s.percent if s.percent is not none else '–' }}</td></tr>
+        {% endfor %}
+      </table>
+      {% for d in stats.districts %}
+        <details><summary>{{ d.name }} <span class="muted">{{ '{:,.0f}'.format(d.km2) }} km²</span></summary>
+          <table>{% for s in d.stats if s.pixels %}<tr><td><span class="swatch" style="background: {{ s.color }}"></span>{{ s.name }}</td><td class="num">{{ '{:,.1f}'.format(s.area_km2) }}</td></tr>{% endfor %}</table>
+        </details>
+      {% endfor %}
+      {% else %}<p class="empty">Build products to compute statistics.</p>{% endif %}
+    </div>
+
+    <div class="card">
+      <h2>Downloads</h2>
+      {% set base = 'regions/' ~ row.id %}
+      <div class="row">
+        {% if products['report.pdf'] %}<a class="btn small ghost" href="{{ url_for('files', relpath=row.folder ~ '/products/report.pdf') }}?download=1">PDF report</a>{% endif %}
+        {% if products['lithology.geojson'] %}<a class="btn small ghost" href="{{ url_for('files', relpath=row.folder ~ '/products/lithology.geojson') }}?download=1">Polygons (GeoJSON)</a>{% endif %}
+        {% for l in layers %}<a class="btn small ghost" href="{{ url_for('files', relpath=row.folder ~ '/mosaic/' ~ l ~ '.tif') }}?download=1">{{ l }}.tif</a>{% endfor %}
+        {% if not layers and not products['report.pdf'] %}<span class="muted">Nothing yet.</span>{% endif %}
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Legend</h2>
+      <ul class="legend">
+        {% for c in rock_classes %}<li><span class="swatch" style="background: {{ c.color }}"></span>{{ c.name }}</li>{% endfor %}
+        {% for c in mask_classes if c.id != 255 %}<li><span class="swatch" style="background: {{ c.color }}"></span>{{ c.name }}</li>{% endfor %}
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Recent jobs</h2>
+      {% for j in jobs %}<p style="margin: 4px 0"><a href="{{ url_for('job_page', job_id=j.id) }}">#{{ j.id }}</a> <span class="mono">{{ j.kind.replace('region_', '') }}</span> {{ status(j.status) }} <span class="muted">{{ j.created[5:16] }} · {{ j.user or '' }}</span></p>{% else %}<p class="empty">No jobs yet.</p>{% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block footer %}{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='region.js') }}"></script>{% endblock %}

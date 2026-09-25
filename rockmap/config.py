@@ -12,7 +12,12 @@ from pathlib import Path
 # as defined in the project scope (no individual minerals).
 
 NODATA_CLASS = 0
-CLOUD_CLASS = 255  # written to output maps where pixels were masked (cloud / nodata)
+# Non-rock surface classes written to output maps where rock cannot be observed.
+SNOW_CLASS = 250        # snow, glaciers, ice (very common in Gilgit-Baltistan)
+WATER_CLASS = 251       # rivers, lakes
+VEGETATION_CLASS = 252  # dense vegetation / crops / forest hiding the rock
+SHADOW_CLASS = 253      # deep topographic shadow
+CLOUD_CLASS = 255       # cloud or no data
 
 
 @dataclass(frozen=True)
@@ -43,12 +48,25 @@ ROCK_CLASSES: tuple[RockClass, ...] = (
 CLASS_BY_ID = {c.id: c for c in ROCK_CLASSES}
 CLASS_IDS = [c.id for c in ROCK_CLASSES]
 
+MASK_CLASSES: tuple[RockClass, ...] = (
+    RockClass(SNOW_CLASS, "Snow / Glacier / Ice", "#e8f4ff", "Snow and ice cover (NDSI), rock not visible."),
+    RockClass(WATER_CLASS, "Water", "#1f5fbf", "Rivers and lakes."),
+    RockClass(VEGETATION_CLASS, "Dense vegetation", "#6aa84f", "Forest, crops and orchards (NDVI)."),
+    RockClass(SHADOW_CLASS, "Terrain shadow", "#555a66", "Deep topographic shadow; too dark to classify."),
+    RockClass(CLOUD_CLASS, "Cloud / no data", "#ffffff", "Cloud, cloud shadow or missing imagery."),
+)
+MASK_BY_ID = {c.id: c for c in MASK_CLASSES}
+ALL_CLASSES = {**CLASS_BY_ID, **MASK_BY_ID}
+
 
 def class_name(class_id: int) -> str:
-    if class_id == CLOUD_CLASS:
-        return "Masked (cloud / no data)"
-    c = CLASS_BY_ID.get(int(class_id))
+    c = ALL_CLASSES.get(int(class_id))
     return c.name if c else f"Class {class_id}"
+
+
+def class_color(class_id: int) -> str:
+    c = ALL_CLASSES.get(int(class_id))
+    return c.color if c else "#000000"
 
 
 def hex_to_rgb(color: str) -> tuple[int, int, int]:
@@ -83,6 +101,9 @@ SENSORS: dict[str, SensorPreset] = {
     # Landsat 8/9 Collection 2 Level-2 surface reflectance
     "landsat89": SensorPreset("Landsat 8/9 C2 L2", ("SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7"),
                               scale=2.75e-5, offset=-0.2, resolution=30.0),
+    # RockMap cloud-free composite (uint16 reflectance x 10000 + SCL-compatible code band)
+    "sentinel2_composite": SensorPreset("RockMap Sentinel-2 composite", CANONICAL_BANDS,
+                                        scale=1e-4, offset=0.0, resolution=20.0),
     # Data already expressed as reflectance in [0, 1] (e.g. the synthetic demo)
     "reflectance": SensorPreset("Surface reflectance (0-1)", CANONICAL_BANDS,
                                 scale=1.0, offset=0.0, resolution=0.0),
@@ -100,6 +121,10 @@ ALGORITHM_LABELS = {
     "rf": "Random Forest",
     "svm": "Support Vector Machine",
 }
+
+
+# Terrain features use absolute elevation (km) so tiles of a large region are comparable.
+ELEVATION_SCALE_M = 1000.0
 
 
 def data_dir() -> Path:

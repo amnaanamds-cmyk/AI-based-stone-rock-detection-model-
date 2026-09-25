@@ -85,7 +85,9 @@
       fetch(job.dataset.api).then(function (r) { return r.json(); }).then(function (j) {
         bar.style.width = Math.round(j.progress * 100) + "%";
         msg.textContent = j.message || j.status;
-        if (j.status === "done" || j.status === "failed") { window.location.reload(); }
+        var logEl = job.querySelector("[data-log]");
+        if (logEl && j.log) { logEl.textContent = j.log; logEl.scrollTop = logEl.scrollHeight; }
+        if (["done", "failed", "cancelled"].indexOf(j.status) >= 0) { window.location.reload(); }
         else { setTimeout(poll, 1000); }
       }).catch(function () { setTimeout(poll, 3000); });
     };

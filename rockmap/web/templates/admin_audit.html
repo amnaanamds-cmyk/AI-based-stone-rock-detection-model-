@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Audit log{% endblock %}
+{% block content %}
+<h1>Audit log</h1>
+<p class="sub">Last 500 actions (sign-ins, uploads, jobs, deletions, user changes).</p>
+<div class="card"><div class="table-wrap"><table>
+  <tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th><th>IP</th></tr>
+  {% for e in entries %}<tr><td class="mono">{{ e.created }}</td><td>{{ e.username or '-' }}</td><td class="mono">{{ e.action }}</td><td>{{ e.detail }}</td><td class="muted mono">{{ e.ip }}</td></tr>{% endfor %}
+</table></div></div>
+{% endblock %}

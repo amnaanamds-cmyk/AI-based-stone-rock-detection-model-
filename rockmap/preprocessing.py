@@ -19,10 +19,11 @@ from .config import CANONICAL_BANDS, SENSORS
 from .io import GeoInfo, align_to, write_raster
 
 # Sentinel-2 Scene Classification Layer classes treated as invalid:
-# 0 no data, 1 saturated/defective, 3 cloud shadow, 8 cloud medium, 9 cloud high, 10 cirrus, 11 snow
-S2_SCL_INVALID = (0, 1, 3, 8, 9, 10, 11)
-# Landsat C2 QA_PIXEL bits: 0 fill, 1 dilated cloud, 2 cirrus, 3 cloud, 4 cloud shadow, 5 snow
-LANDSAT_QA_BITS = (0, 1, 2, 3, 4, 5)
+# 0 no data, 1 saturated/defective, 3 cloud shadow, 8 cloud medium, 9 cloud high, 10 cirrus.
+# Snow (11) and water (6) are valid observations; they become land-cover mask classes.
+S2_SCL_INVALID = (0, 1, 3, 8, 9, 10)
+# Landsat C2 QA_PIXEL bits: 0 fill, 1 dilated cloud, 2 cirrus, 3 cloud, 4 cloud shadow
+LANDSAT_QA_BITS = (0, 1, 2, 3, 4)
 
 
 def to_reflectance(dn: np.ndarray, sensor: str = "sentinel2") -> np.ndarray:
@@ -59,7 +60,10 @@ def hot_cloud_mask(refl: np.ndarray, threshold: float = 0.08) -> np.ndarray:
     # bright, spectrally flat pixels with high blue are clouds; bright desert/carbonates
     # have strong blue->SWIR increase and are kept.
     flat = swir1 < 1.35 * blue
-    return (hot > 0) & bright & flat
+    # snow/ice is also bright and blue but strongly absorbs in SWIR (high NDSI)
+    green = refl[1]
+    not_snow = (green - swir1) / (green + swir1 + 1e-6) < 0.4
+    return (hot > 0) & bright & flat & not_snow
 
 
 def scl_mask(scl: np.ndarray) -> np.ndarray:
@@ -161,3 +165,79 @@ def find_sentinel2_bands(safe_dir: str | Path, resolution: int = 20) -> tuple[li
     bands = [pick(b) for b in wanted]
     scl = [f for f in files if "_SCL" in f.name]
     return bands, (scl[0] if scl else None)
+
+
+# ---------------------------------------------------------------------------
+# Land-cover masking and topographic correction (mountain terrain)
+# ---------------------------------------------------------------------------
+
+def illumination(dem: np.ndarray, pixel_size: float, sun_azimuth: float, sun_elevation: float) -> np.ndarray:
+    """cos(i): cosine of the solar incidence angle on each (sloped) pixel."""
+    dem = np.where(np.isfinite(dem), dem, np.nanmean(dem) if np.isfinite(dem).any() else 0.0)
+    dz_dy, dz_dx = np.gradient(dem.astype(np.float64), pixel_size)
+    slope = np.arctan(np.hypot(dz_dx, dz_dy))
+    aspect = np.arctan2(-dz_dx, dz_dy)
+    zen = np.radians(90.0 - sun_elevation)
+    az = np.radians(sun_azimuth)
+    return (np.cos(zen) * np.cos(slope) + np.sin(zen) * np.sin(slope) * np.cos(az - aspect)).astype(np.float32)
+
+
+def c_correction(refl: np.ndarray, cos_i: np.ndarray, sun_elevation: float,
+                 valid: Optional[np.ndarray] = None) -> np.ndarray:
+    """Topographic C-correction (Teillet et al., 1982).
+
+    Steep Karakoram / Himalaya slopes facing away from the sun look darker than the same
+    rock facing the sun. For each band, reflectance is regressed against cos(i):
+    ``refl = a + b cos(i)``, ``c = a / b`` and ``refl_corr = refl (cos(sz) + c) / (cos(i) + c)``.
+    """
+    cos_sz = np.cos(np.radians(90.0 - sun_elevation))
+    ok = (cos_i > 0.05) & np.all(np.isfinite(refl), axis=0)
+    if valid is not None:
+        ok &= valid
+    out = refl.copy()
+    if ok.sum() < 500:
+        return out
+    x = cos_i[ok].astype(np.float64)
+    for b in range(refl.shape[0]):
+        y = refl[b][ok].astype(np.float64)
+        slope, intercept = np.polyfit(x, y, 1)
+        if slope <= 1e-6:
+            continue
+        c = max(intercept / slope, 0.0)
+        factor = (cos_sz + c) / (np.maximum(cos_i, 0.05) + c)
+        out[b] = refl[b] * np.clip(factor, 0.3, 3.0)
+    return out
+
+
+def landcover_mask(refl: np.ndarray, cos_i: Optional[np.ndarray] = None,
+                   scl: Optional[np.ndarray] = None) -> np.ndarray:
+    """Classify pixels where rock cannot be observed.
+
+    Returns uint8 codes: 0 = bare rock / soil (classifiable), SNOW_CLASS, WATER_CLASS,
+    VEGETATION_CLASS or SHADOW_CLASS. Spectral rules:
+
+    * snow / ice : NDSI = (green - swir1) / (green + swir1) > 0.4, green > 0.15, nir > 0.11
+    * water      : NDSI > 0.1 and dark NIR (< 0.10), or NDWI (green - nir)/(green + nir) > 0.15
+    * vegetation : NDVI > 0.45
+    * shadow     : very dark (mean reflectance < 0.035) or self-shadowed (cos i < 0.02)
+    """
+    from .config import SHADOW_CLASS, SNOW_CLASS, VEGETATION_CLASS, WATER_CLASS
+    r = np.nan_to_num(refl)
+    blue, green, red, nir, swir1 = r[0], r[1], r[2], r[3], r[4]
+    eps = 1e-6
+    ndsi = (green - swir1) / (green + swir1 + eps)
+    ndvi = (nir - red) / (nir + red + eps)
+    ndwi = (green - nir) / (green + nir + eps)
+    out = np.zeros(refl.shape[1:], np.uint8)
+    dark = r[:6].mean(axis=0) < 0.035
+    if cos_i is not None:
+        dark |= cos_i < 0.02
+    out[dark] = SHADOW_CLASS
+    out[ndvi > 0.45] = VEGETATION_CLASS
+    out[((ndsi > 0.1) & (nir < 0.10)) | ((ndwi > 0.15) & (nir < 0.15))] = WATER_CLASS
+    out[(ndsi > 0.4) & (green > 0.15) & (nir > 0.11)] = SNOW_CLASS
+    if scl is not None:
+        s = np.nan_to_num(scl, nan=0).astype(np.int32)
+        out[s == 11] = SNOW_CLASS
+        out[s == 6] = WATER_CLASS
+    return out

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status %}
+{% block title %}Jobs{% endblock %}
+{% block content %}
+<h1>Processing jobs</h1>
+<p class="sub">Queued jobs run one after another in the background; region jobs resume tile by tile after an interruption.</p>
+<div class="card"><div class="table-wrap"><table>
+  <tr><th>#</th><th>Kind</th><th>Status</th><th>Progress</th><th>Message</th><th>User</th><th>Created</th><th></th></tr>
+  {% for j in jobs %}
+  <tr><td><a href="{{ url_for('job_page', job_id=j.id) }}">{{ j.id }}</a></td><td class="mono">{{ j.kind }}</td><td>{{ status(j.status) }}</td>
+    <td style="width: 110px"><div class="progress" style="height: 8px"><span style="width: {{ (j.progress * 100)|round|int }}%"></span></div></td>
+    <td class="muted" style="max-width: 380px">{{ j.error if j.status == 'failed' else j.message }}</td><td>{{ j.user or '-' }}</td><td class="muted">{{ j.created[5:16] }}</td>
+    <td>{% if j.status in ('queued', 'running') and has_role('analyst') %}<form class="inline" method="post" action="{{ url_for('cancel_job', job_id=j.id) }}">{{ csrf_field() }}<button class="btn small danger">Cancel</button></form>{% endif %}</td></tr>
+  {% else %}<tr><td colspan="8" class="empty">No jobs yet.</td></tr>{% endfor %}
+</table></div></div>
+{% endblock %}

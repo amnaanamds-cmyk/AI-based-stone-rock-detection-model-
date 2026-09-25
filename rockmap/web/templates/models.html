@@ -12,7 +12,7 @@
     <td>{% for a, s in m.summary.items() %}<span class="badge">{{ a|upper }} {{ '%.3f' % s.kappa }}</span> {% endfor %}</td>
     <td>{{ algorithm_labels[m.best_algo] }}</td><td>{{ 'yes' if m.uses_dem else 'no' }}</td>
     <td class="muted">{{ m.created[:16] }}</td>
-    <td><form class="inline" method="post" action="{{ url_for('delete_model', model_id=m.id) }}" onsubmit="return confirm('Delete this model?')"><button class="btn small danger">Delete</button></form></td></tr>
+    <td>{% if has_role('admin') %}<form class="inline" method="post" action="{{ url_for('delete_model', model_id=m.id) }}" onsubmit="return confirm('Delete this model?')">{{ csrf_field() }}<button class="btn small danger">Delete</button></form>{% endif %}</td></tr>
   {% endfor %}
 </table></div>
 {% else %}<p class="empty">No models yet. Open a scene that has a reference geological map and start training.</p>{% endif %}

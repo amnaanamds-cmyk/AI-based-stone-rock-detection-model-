@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Profile{% endblock %}
+{% block content %}
+<h1>{{ user.username }}</h1>
+<p class="sub">Role: {{ user.role }} · last sign-in {{ user.last_login or '-' }}</p>
+<div class="grid two">
+  <form class="card" method="post">{{ csrf_field() }}
+    <h2>Change password</h2>
+    <input type="hidden" name="action" value="password">
+    <label for="current">Current password</label><input type="password" id="current" name="current" required autocomplete="current-password">
+    <label for="new">New password (min. 8 characters)</label><input type="password" id="new" name="new" required minlength="8" autocomplete="new-password">
+    <label for="confirm">Repeat new password</label><input type="password" id="confirm" name="confirm" required minlength="8" autocomplete="new-password">
+    <p style="margin-top: 16px"><button class="btn">Change password</button></p>
+  </form>
+  <div class="card">
+    <h2>API access</h2>
+    <p class="hint">Use a personal token to call the REST API from scripts, QGIS or other systems:<br>
+      <span class="mono">curl -H "Authorization: Bearer &lt;token&gt;" {{ request.host_url }}api/regions</span></p>
+    {% if token %}
+      <div class="flash ok">New token (shown once — copy it now):<br><span class="mono" style="word-break: break-all">{{ token }}</span></div>
+    {% endif %}
+    <p>Status: {{ 'a token is active' if user.api_token_hash else 'no token' }}</p>
+    <div class="row">
+      <form class="inline" method="post">{{ csrf_field() }}<input type="hidden" name="action" value="token"><button class="btn small">{{ 'Regenerate' if user.api_token_hash else 'Create' }} token</button></form>
+      {% if user.api_token_hash %}<form class="inline" method="post">{{ csrf_field() }}<input type="hidden" name="action" value="revoke"><button class="btn small danger">Revoke</button></form>{% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

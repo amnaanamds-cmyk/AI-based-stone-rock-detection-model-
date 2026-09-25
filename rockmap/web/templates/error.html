@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Error {{ code }}{% endblock %}
+{% block content %}
+<div class="card" style="max-width: 520px; margin: 8vh auto 0; text-align: center">
+  <div class="stat">{{ code }}</div>
+  <p>{{ message }}</p>
+  <p><a class="btn ghost" href="{{ url_for('index') }}">Back to dashboard</a></p>
+</div>
+{% endblock %}

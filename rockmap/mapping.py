@@ -8,7 +8,7 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage
 
-from .config import CLASS_BY_ID, CLASS_IDS, CLOUD_CLASS, class_name, hex_to_rgb
+from .config import ALL_CLASSES, CLASS_BY_ID, CLASS_IDS, CLOUD_CLASS, MASK_CLASSES, class_name, hex_to_rgb
 
 
 def majority_filter(labels: np.ndarray, size: int = 3, keep: Optional[np.ndarray] = None) -> np.ndarray:
@@ -20,7 +20,7 @@ def majority_filter(labels: np.ndarray, size: int = 3, keep: Optional[np.ndarray
         return labels
     votes = np.stack([ndimage.uniform_filter((labels == c).astype(np.float32), size) for c in classes])
     out = np.asarray(classes, dtype=labels.dtype)[votes.argmax(0)]
-    masked = (labels == 0) | (labels == CLOUD_CLASS)
+    masked = (labels == 0) | (labels >= 250)
     out[masked] = labels[masked]
     if keep is not None:
         out[keep] = labels[keep]
@@ -28,11 +28,12 @@ def majority_filter(labels: np.ndarray, size: int = 3, keep: Optional[np.ndarray
 
 
 def colorize(labels: np.ndarray) -> np.ndarray:
-    """(H, W) class ids -> (H, W, 4) RGBA uint8. Masked pixels are transparent."""
-    rgba = np.zeros((*labels.shape, 4), dtype=np.uint8)
-    for cid, c in CLASS_BY_ID.items():
-        rgba[labels == cid] = (*hex_to_rgb(c.color), 255)
-    return rgba
+    """(H, W) class ids -> (H, W, 4) RGBA uint8. Cloud / no-data pixels are transparent."""
+    lut = np.zeros((256, 4), np.uint8)
+    for cid, c in ALL_CLASSES.items():
+        lut[cid] = (*hex_to_rgb(c.color), 255)
+    lut[CLOUD_CLASS] = 0
+    return lut[labels.astype(np.uint8)]
 
 
 def stretch(band: np.ndarray, valid: Optional[np.ndarray] = None, lo: float = 2, hi: float = 98) -> np.ndarray:
@@ -71,19 +72,28 @@ def hillshade_png(dem: np.ndarray, pixel_size: float = 20.0) -> np.ndarray:
     return np.dstack([g, g, g])
 
 
-def area_statistics(labels: np.ndarray, pixel_area_km2: float) -> list[dict]:
-    """Area and percentage of each lithology class in a classified map."""
-    total = int(((labels > 0) & (labels != CLOUD_CLASS)).sum())
+def area_statistics_from_counts(counts: np.ndarray, pixel_area_km2: float) -> list[dict]:
+    """Area of each lithology (percent of classified rock) and of each masked surface type."""
+    counts = np.asarray(counts)
+    rock_total = int(sum(counts[c] for c in CLASS_IDS))
     stats = []
     for cid in CLASS_IDS:
-        n = int((labels == cid).sum())
+        n = int(counts[cid])
         stats.append({"id": cid, "name": class_name(cid), "color": CLASS_BY_ID[cid].color, "pixels": n,
-                      "area_km2": n * pixel_area_km2, "percent": 100.0 * n / total if total else 0.0})
-    masked = int((labels == CLOUD_CLASS).sum())
-    if masked:
-        stats.append({"id": CLOUD_CLASS, "name": class_name(CLOUD_CLASS), "color": "#ffffff",
-                      "pixels": masked, "area_km2": masked * pixel_area_km2, "percent": None})
+                      "area_km2": n * pixel_area_km2, "percent": 100.0 * n / rock_total if rock_total else 0.0,
+                      "kind": "rock"})
+    for m in MASK_CLASSES:
+        n = int(counts[m.id])
+        if n:
+            stats.append({"id": m.id, "name": m.name, "color": m.color, "pixels": n,
+                          "area_km2": n * pixel_area_km2, "percent": None, "kind": "mask"})
     return stats
+
+
+def area_statistics(labels: np.ndarray, pixel_area_km2: float) -> list[dict]:
+    """Area and percentage of each lithology class in a classified map."""
+    return area_statistics_from_counts(np.bincount(labels.astype(np.uint8).ravel(), minlength=256),
+                                       pixel_area_km2)
 
 
 def plot_confusion(metrics: dict, path: str | Path, title: str = "Confusion matrix") -> Path:
@@ -126,8 +136,9 @@ def plot_map_with_legend(labels: np.ndarray, path: str | Path, title: str = "Lit
     ax.imshow(colorize(labels), interpolation="nearest")
     ax.set_title(title)
     ax.axis("off")
-    present = [c for c in CLASS_IDS if (labels == c).any()]
-    handles = [Patch(facecolor=CLASS_BY_ID[c].color, edgecolor="#333", label=CLASS_BY_ID[c].name) for c in present]
+    present = [c for c in list(CLASS_IDS) + [m.id for m in MASK_CLASSES if m.id != CLOUD_CLASS]
+               if (labels == c).any()]
+    handles = [Patch(facecolor=ALL_CLASSES[c].color, edgecolor="#333", label=ALL_CLASSES[c].name) for c in present]
     ax.legend(handles=handles, loc="center left", bbox_to_anchor=(1.01, 0.5), fontsize=8, frameon=False)
     fig.tight_layout()
     path = Path(path)

@@ -3,31 +3,43 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>{% block title %}RockMap{% endblock %} · RockMap</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M3 26 11 10l5 7 4-5 9 14z' fill='%23b5562b'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   {% block head %}{% endblock %}
 </head>
-<body>
+<body class="{% block bodyclass %}{% endblock %}">
 <header class="top">
   <a class="brand" href="{{ url_for('index') }}">
     <svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true"><path d="M3 26 11 10l5 7 4-5 9 14z" fill="#b5562b"/><path d="M11 10l5 7-4 9H3z" fill="#e0a458"/><circle cx="24" cy="7" r="3" fill="#4fa3e0"/></svg>
     RockMap
   </a>
-  {% set ep = request.endpoint %}
+  {% if current_user %}
+  {% set ep = request.endpoint or '' %}
   <nav>
     <a href="{{ url_for('index') }}" class="{{ 'active' if ep == 'index' }}">Dashboard</a>
-    <a href="{{ url_for('upload') }}" class="{{ 'active' if ep == 'upload' }}">Upload scene</a>
+    <a href="{{ url_for('regions.regions_page') }}" class="{{ 'active' if ep.startswith('regions.') }}">Regions</a>
+    <a href="{{ url_for('upload') }}" class="{{ 'active' if ep in ('upload', 'scene_page') }}">Scenes</a>
     <a href="{{ url_for('models_page') }}" class="{{ 'active' if ep in ('models_page', 'model_page') }}">Models</a>
+    <a href="{{ url_for('jobs_page') }}" class="{{ 'active' if ep in ('jobs_page', 'job_page') }}">Jobs</a>
+    {% if has_role('admin') %}<a href="{{ url_for('admin_users') }}" class="{{ 'active' if ep.startswith('admin') }}">Admin</a>{% endif %}
     <a href="{{ url_for('about') }}" class="{{ 'active' if ep == 'about' }}">About</a>
   </nav>
+  <span class="spacer"></span>
+  <div class="user">
+    <a href="{{ url_for('profile') }}" title="Profile & API token">{{ current_user.username }}</a> <span class="badge">{{ current_user.role }}</span>
+    <form class="inline" method="post" action="{{ url_for('logout') }}">{{ csrf_field() }}<button class="btn small ghost">Sign out</button></form>
+  </div>
+  {% endif %}
 </header>
-<main>
+<main class="{% block mainclass %}{% endblock %}">
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% for cat, m in messages %}<div class="flash {{ cat }}">{{ m }}</div>{% endfor %}
   {% endwith %}
   {% block content %}{% endblock %}
 </main>
-<footer>RockMap v{{ version }} · AI-Based Satellite Rock/Stone Detection and Geological Mapping System · GDC Zaim, Charsadda</footer>
+{% block footer %}<footer>RockMap v{{ version }} · AI-Based Satellite Rock/Stone Detection and Geological Mapping System{% if organisation %} · {{ organisation }}{% endif %}</footer>{% endblock %}
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 {% block scripts %}{% endblock %}
 </body>

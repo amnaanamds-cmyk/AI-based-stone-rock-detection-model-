@@ -3,30 +3,40 @@
 {% block title %}Dashboard{% endblock %}
 {% block content %}
 <h1>Geological mapping dashboard</h1>
-<p class="sub">Classify satellite imagery (Sentinel-2 / Landsat) into rock / lithology types with a CNN, benchmarked against Random Forest and SVM.</p>
+<p class="sub">Map surface rock types from Sentinel-2 imagery and the Copernicus DEM with a CNN, benchmarked against Random Forest and SVM. Built for Gilgit-Baltistan.</p>
 
 <div class="grid three" style="margin-bottom: 16px">
-  <div class="card"><div class="stat">{{ scenes|length }}</div><div class="stat-label">Study-area scenes</div></div>
+  <div class="card"><div class="stat">{{ regions|length }}</div><div class="stat-label">Regions</div></div>
   <div class="card"><div class="stat">{{ models|length }}</div><div class="stat-label">Trained models</div></div>
-  <div class="card"><div class="stat">{{ jobs|selectattr('kind', 'equalto', 'classify')|selectattr('status', 'equalto', 'done')|list|length }}</div><div class="stat-label">Recent maps produced</div></div>
+  <div class="card"><div class="stat">{{ running }}</div><div class="stat-label">Jobs queued / running</div></div>
 </div>
 
-{% if not scenes %}
 <div class="card" style="margin-bottom: 16px">
-  <h2>Getting started</h2>
-  <ol>
-    <li><b>Add a scene</b> — upload a Sentinel-2 / Landsat GeoTIFF (with an optional SRTM DEM and a reference geological map), or create a synthetic study area to try the system.</li>
-    <li><b>Train</b> the CNN, Random Forest and SVM on a scene that has a reference geological map.</li>
-    <li><b>Select a region and classify</b> to produce a colour-coded lithological map, area statistics and an accuracy report.</li>
+  <div class="row"><h2 style="margin: 0">Regions</h2><span class="spacer"></span>
+    {% if has_role('analyst') %}<a class="btn small" href="{{ url_for('regions.region_new') }}">+ New region</a>{% endif %}</div>
+  {% if regions %}
+  <div class="table-wrap"><table style="margin-top: 8px">
+    <tr><th>Region</th><th class="num">Tiles</th><th class="num">Imagery</th><th class="num">Classified</th><th class="num">Area</th></tr>
+    {% for r in regions %}<tr><td><a href="{{ url_for('regions.region_page', region_id=r.id) }}"><b>{{ r.name }}</b></a></td>
+      <td class="num">{{ r.summary.tiles }}</td><td class="num">{{ r.summary.acquired }}</td><td class="num">{{ r.summary.classified }}</td>
+      <td class="num">{{ '{:,.0f}'.format(r.summary.area_km2) }} km²</td></tr>{% endfor %}
+  </table></div>
+  {% else %}
+  <ol style="margin-bottom: 0">
+    <li><b>Create a region</b>: all of Gilgit-Baltistan, a preset valley (Gilgit, Hunza, Skardu, Astore, Chilas, Khaplu), a rectangle you draw, or an uploaded boundary.</li>
+    <li><b>Acquire</b>: cloud-free Sentinel-2 composites and the 30 m DEM are downloaded automatically, tile by tile.</li>
+    <li><b>Add training data</b>: upload a digitised geological map, or draw training areas you are sure of on the map.</li>
+    <li><b>Train, classify and build products</b>: seamless map, statistics per district, GeoJSON polygons, GeoTIFFs and a PDF report.</li>
   </ol>
+  {% endif %}
 </div>
-{% endif %}
 
+<h2>Single-scene analysis</h2>
 <div class="grid side">
   <div class="card">
     <div class="row"><h2>Scenes</h2><span class="spacer"></span>
-      <a class="btn small ghost" href="{{ url_for('upload') }}">Upload</a>
-      <form class="inline" method="post" action="{{ url_for('create_demo') }}"><button class="btn small">+ Synthetic study area</button></form>
+      {% if has_role('analyst') %}<a class="btn small ghost" href="{{ url_for('upload') }}">Upload</a>
+      <form class="inline" method="post" action="{{ url_for('create_demo') }}">{{ csrf_field() }}<button class="btn small">+ Synthetic study area</button></form>{% endif %}
     </div>
     {% if scenes %}
     <div class="table-wrap"><table>

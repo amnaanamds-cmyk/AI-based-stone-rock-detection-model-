@@ -5,15 +5,16 @@ from typing import Optional
 
 import numpy as np
 
-from .config import CLASS_IDS, CLOUD_CLASS, class_name
+from .config import CLASS_IDS, class_name
 
 
 def confusion_matrix(y_true: np.ndarray, y_pred: np.ndarray, classes=CLASS_IDS) -> np.ndarray:
     """Rows = reference class, columns = predicted class."""
-    lut = {c: i for i, c in enumerate(classes)}
     n = len(classes)
-    t = np.array([lut.get(int(v), -1) for v in np.ravel(y_true)])
-    p = np.array([lut.get(int(v), -1) for v in np.ravel(y_pred)])
+    lut = np.full(256, -1, np.int64)
+    lut[np.asarray(classes, dtype=np.int64)] = np.arange(n)
+    t = lut[np.clip(np.ravel(y_true).astype(np.int64), 0, 255)]
+    p = lut[np.clip(np.ravel(y_pred).astype(np.int64), 0, 255)]
     ok = (t >= 0) & (p >= 0)
     return np.bincount(t[ok] * n + p[ok], minlength=n * n).reshape(n, n)
 
@@ -53,7 +54,7 @@ def evaluate(y_true: np.ndarray, y_pred: np.ndarray, classes=CLASS_IDS) -> dict:
 def compare_maps(predicted: np.ndarray, reference: np.ndarray, mask: Optional[np.ndarray] = None,
                  classes=CLASS_IDS) -> dict:
     """Pixel-wise validation of a classified map against a reference geological map."""
-    ok = (reference > 0) & (predicted > 0) & (predicted != CLOUD_CLASS)
+    ok = (reference > 0) & np.isin(predicted, classes)
     if mask is not None:
         ok &= mask
     return evaluate(reference[ok], predicted[ok], classes)

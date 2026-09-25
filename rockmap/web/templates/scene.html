@@ -7,7 +7,7 @@
   <div><h1>{{ scene.name }}</h1>
   <p class="sub">{{ sensors[scene.sensor].name }} · {{ scene.width }}×{{ scene.height }} px · {{ '%g' % scene.pixel_size }} {{ 'm' if scene.crs and 'EPSG:4326' not in scene.crs else 'units' }}/px · {{ scene.crs or 'no CRS' }}</p></div>
   <span class="spacer"></span>
-  <form class="inline" method="post" action="{{ url_for('delete_scene', scene_id=scene.id) }}" onsubmit="return confirm('Delete this scene and its files?')"><button class="btn small danger">Delete scene</button></form>
+  {% if has_role('admin') %}<form class="inline" method="post" action="{{ url_for('delete_scene', scene_id=scene.id) }}" onsubmit="return confirm('Delete this scene and its files?')">{{ csrf_field() }}<button class="btn small danger">Delete scene</button></form>{% endif %}
 </div>
 
 <div class="grid side">
@@ -29,7 +29,8 @@
   </div>
 
   <div class="grid" style="align-content: start">
-    <form class="card" method="post" action="{{ url_for('classify', scene_id=scene.id) }}">
+    {% if has_role('analyst') %}
+    <form class="card" method="post" action="{{ url_for('classify', scene_id=scene.id) }}">{{ csrf_field() }}
       <h2>Run classification</h2>
       <input type="hidden" name="window" id="window-input">
       {% if models %}
@@ -53,7 +54,7 @@
       {% endif %}
     </form>
 
-    <form class="card" method="post" action="{{ url_for('train', scene_id=scene.id) }}">
+    <form class="card" method="post" action="{{ url_for('train', scene_id=scene.id) }}">{{ csrf_field() }}
       <h2>Train models</h2>
       {% if scene.has_reference %}
       <label for="name">Model name</label>
@@ -71,6 +72,7 @@
       <p class="empty">Training requires a reference geological map. Upload the scene again with one.</p>
       {% endif %}
     </form>
+    {% endif %}
 
     <div class="card">
       <h2>Jobs on this scene</h2>

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -121,9 +122,133 @@ def cmd_demo(a):
 
 def cmd_serve(a):
     from .web.app import create_app
-    app = create_app(Path(a.data) if a.data else None)
-    print(f"RockMap dashboard on http://{a.host}:{a.port}  (data folder: {app.config['DATA_DIR']})")
-    app.run(host=a.host, port=a.port, debug=a.debug, threaded=True)
+    app = create_app(Path(a.data) if a.data else None, workers=a.workers)
+    print(f"RockMap dashboard on http://{a.host}:{a.port}  (data folder: {app.config['DATA_DIR']})", flush=True)
+    if a.debug:
+        app.run(host=a.host, port=a.port, debug=True, threaded=True)
+        return
+    try:
+        from waitress import serve
+    except ImportError:  # pragma: no cover
+        print("waitress not installed - using the Flask development server")
+        app.run(host=a.host, port=a.port, threaded=True)
+        return
+    serve(app, host=a.host, port=a.port, threads=a.http_threads, channel_timeout=300)
+
+
+# ---------------------------------------------------------------------------
+# Region (large-area) commands
+# ---------------------------------------------------------------------------
+
+def _region(a):
+    from .region import Region
+    return Region(a.region)
+
+
+def cmd_presets(a):
+    from .presets import PRESETS
+    for k, p in PRESETS.items():
+        print(f"{k:18s} {p['name']}")
+
+
+def cmd_region_create(a):
+    from .presets import PRESETS
+    from .region import Region, RegionConfig, load_geojson_geometry
+    if a.preset:
+        geom, name = PRESETS[a.preset]["geometry"], a.name or PRESETS[a.preset]["name"]
+    elif a.aoi:
+        geom, name = load_geojson_geometry(json.loads(Path(a.aoi).read_text())), a.name or Path(a.aoi).stem
+    else:
+        sys.exit("give --preset or --aoi")
+    cfg = RegionConfig(name=name, aoi=geom, resolution=a.resolution, tile_size=a.tile_size,
+                       years=a.years, months=a.months, max_cloud=a.max_cloud, max_scenes=a.max_scenes,
+                       source="local" if a.local_scenes else "sentinel2", local_scenes=a.local_scenes or [],
+                       local_sensor=a.local_sensor, local_dem=a.local_dem)
+    r = Region.create(a.out, cfg)
+    s = r.summary()
+    print(f"Region '{name}': {s['tiles']} tiles of {cfg.tile_size * cfg.resolution / 1000:g} km, "
+          f"EPSG:{r.config.epsg}, grid {r.width} x {r.height} px -> {a.out}")
+
+
+def cmd_region_acquire(a):
+    print(_region(a).acquire(_progress, keys=a.tiles, force=a.force))
+
+
+def cmd_region_train(a):
+    from .reference import load_reference_features
+    r = _region(a)
+    mapping = json.loads(Path(a.mapping).read_text()) if a.mapping else None
+    feats = []
+    for v in a.reference or []:
+        feats += load_reference_features(v, a.field, mapping)
+    meta = r.train(a.out, feats, a.label_raster or [], a.algorithms, a.samples, a.epochs, progress=_progress)
+    _print_benchmark(meta)
+
+
+def cmd_region_classify(a):
+    print(_region(a).classify(a.model, a.algorithm, a.smoothing, _progress, keys=a.tiles))
+
+
+def cmd_region_mosaic(a):
+    for k, v in _region(a).build_mosaics(_progress).items():
+        print(f"{k:12s} {v}")
+
+
+def cmd_region_stats(a):
+    r = _region(a)
+    districts = json.loads(Path(a.districts).read_text()) if a.districts else None
+    st = r.statistics(districts, a.name_field)
+    print(f"{'Class':36s} {'km2':>10s} {'% rock':>7s}")
+    for s in st["region"]:
+        pct = f"{s['percent']:6.1f}" if s["percent"] is not None else "     -"
+        print(f"{s['name']:36s} {s['area_km2']:10.2f} {pct}")
+    for d in st["districts"]:
+        print(f"\n{d['name']} ({d['km2']:.0f} km2)")
+        for s in d["stats"]:
+            if s["pixels"]:
+                print(f"  {s['name']:34s} {s['area_km2']:10.2f}")
+    if a.json:
+        Path(a.json).write_text(json.dumps(st, indent=2))
+
+
+def cmd_region_export(a):
+    print(_region(a).export_geojson(a.out, a.min_pixels, a.include_masks, _progress))
+
+
+def cmd_region_report(a):
+    from .report import load_meta, region_report
+    r = _region(a)
+    districts = json.loads(Path(a.districts).read_text()) if a.districts else None
+    model = a.model or r.state().get("model")
+    print(region_report(r, a.out, load_meta(model) if model else None, r.statistics(districts, a.name_field),
+                        a.organisation))
+
+
+def cmd_region_query(a):
+    print(json.dumps(_region(a).query(a.lon, a.lat), indent=2))
+
+
+def cmd_region_status(a):
+    r = _region(a)
+    print(json.dumps({"name": r.config.name, **r.summary()}, indent=2))
+
+
+def cmd_create_user(a):
+    import getpass
+    from .web.auth import create_user
+    from .web.db import Database
+    root = Path(a.data) if a.data else Path(os.environ.get("ROCKMAP_DATA_DIR", "data"))
+    root.mkdir(parents=True, exist_ok=True)
+    pw = a.password or getpass.getpass("Password: ")
+    create_user(Database(root / "rockmap.db"), a.username, pw, a.role)
+    print(f"user '{a.username}' ({a.role}) created")
+
+
+def cmd_worker(a):
+    from .web.app import create_app
+    from .web.jobs import run_worker_forever
+    app = create_app(Path(a.data) if a.data else None, workers=0)
+    run_worker_forever(app, a.threads)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -208,8 +333,89 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=5000)
     s.add_argument("--data", help="data folder (default: $ROCKMAP_DATA_DIR or ./data)")
-    s.add_argument("--debug", action="store_true")
+    s.add_argument("--debug", action="store_true", help="Flask development server with debugger")
+    s.add_argument("--workers", type=int, default=None,
+                   help="background job threads in this process (0 = use a separate 'rockmap worker')")
+    s.add_argument("--http-threads", type=int, default=8)
     s.set_defaults(func=cmd_serve)
+
+    s = sub.add_parser("worker", help="run background jobs (separate process from the web server)")
+    s.add_argument("--data")
+    s.add_argument("--threads", type=int, default=1)
+    s.set_defaults(func=cmd_worker)
+
+    s = sub.add_parser("create-user", help="create a dashboard user")
+    s.add_argument("username")
+    s.add_argument("--role", choices=["admin", "analyst", "viewer"], default="analyst")
+    s.add_argument("--password", help="omit to be prompted")
+    s.add_argument("--data")
+    s.set_defaults(func=cmd_create_user)
+
+    s = sub.add_parser("presets", help="list ready-made Gilgit-Baltistan study areas")
+    s.set_defaults(func=cmd_presets)
+
+    reg = sub.add_parser("region", help="large-area processing (e.g. all of Gilgit-Baltistan)")
+    rsub = reg.add_subparsers(dest="region_command", required=True)
+
+    s = rsub.add_parser("create", help="define a region and its tile grid")
+    g = s.add_mutually_exclusive_group(required=True)
+    g.add_argument("--preset", help="see 'rockmap presets' (e.g. gilgit-baltistan, hunza, skardu)")
+    g.add_argument("--aoi", help="GeoJSON boundary (EPSG:4326)")
+    s.add_argument("--name")
+    s.add_argument("--out", required=True, help="region folder")
+    s.add_argument("--resolution", type=float, default=20.0)
+    s.add_argument("--tile-size", type=int, default=1024)
+    s.add_argument("--years", type=int, nargs="+", default=[2023, 2024, 2025])
+    s.add_argument("--months", type=int, nargs="+", default=[7, 8, 9, 10], help="7-10 = least snow")
+    s.add_argument("--max-cloud", type=float, default=30.0)
+    s.add_argument("--max-scenes", type=int, default=6, help="scenes per tile composite")
+    s.add_argument("--local-scenes", nargs="+", help="use these rasters instead of downloading Sentinel-2")
+    s.add_argument("--local-sensor", default="sentinel2", choices=list(SENSORS))
+    s.add_argument("--local-dem")
+    s.set_defaults(func=cmd_region_create)
+
+    def rarg(name, help_, func):
+        s = rsub.add_parser(name, help=help_)
+        s.add_argument("region", help="region folder")
+        s.set_defaults(func=func)
+        return s
+
+    s = rarg("status", "tile counts", cmd_region_status)
+    s = rarg("acquire", "download imagery + DEM and build cloud-free composites", cmd_region_acquire)
+    s.add_argument("--tiles", nargs="+", help="only these tile keys (e.g. 004_002)")
+    s.add_argument("--force", action="store_true", help="re-acquire tiles already done")
+    s = rarg("train", "train models from reference geological maps", cmd_region_train)
+    s.add_argument("--reference", nargs="+", help="GeoJSON / shapefile geological map(s) or training polygons")
+    s.add_argument("--field", default="class_id")
+    s.add_argument("--mapping", help="JSON: attribute value -> class id")
+    s.add_argument("--label-raster", nargs="+", help="label GeoTIFF(s) with class ids")
+    s.add_argument("--out", required=True)
+    s.add_argument("--algorithms", nargs="+", default=list(ALGORITHMS), choices=ALGORITHMS)
+    s.add_argument("--samples", type=int, default=4000)
+    s.add_argument("--epochs", type=int, default=30)
+    s = rarg("classify", "classify all acquired tiles", cmd_region_classify)
+    s.add_argument("--model", required=True)
+    s.add_argument("--algorithm", choices=ALGORITHMS)
+    s.add_argument("--smoothing", type=int, default=3)
+    s.add_argument("--tiles", nargs="+")
+    s = rarg("mosaic", "build region-wide GeoTIFF mosaics with overviews", cmd_region_mosaic)
+    s = rarg("stats", "area statistics (optionally per district)", cmd_region_stats)
+    s.add_argument("--districts", help="district boundaries GeoJSON")
+    s.add_argument("--name-field", default="name")
+    s.add_argument("--json")
+    s = rarg("export", "export lithology polygons to GeoJSON", cmd_region_export)
+    s.add_argument("--out", required=True)
+    s.add_argument("--min-pixels", type=int, default=25)
+    s.add_argument("--include-masks", action="store_true")
+    s = rarg("report", "PDF report", cmd_region_report)
+    s.add_argument("--out", required=True)
+    s.add_argument("--model")
+    s.add_argument("--districts")
+    s.add_argument("--name-field", default="name")
+    s.add_argument("--organisation", default="")
+    s = rarg("query", "lithology, confidence and elevation at a point", cmd_region_query)
+    s.add_argument("--lon", type=float, required=True)
+    s.add_argument("--lat", type=float, required=True)
     return p
 
 

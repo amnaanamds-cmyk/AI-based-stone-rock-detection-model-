@@ -36,7 +36,7 @@ def test_bundle_predict_all_algorithms(trained_bundle, small_scene):
     for algo in bundle.algorithms:
         labels, conf = bundle.predict(scene, algo)
         assert labels.shape == (160, 160)
-        assert set(np.unique(labels)) <= set(range(1, 8)) | {255}
+        assert set(np.unique(labels)) <= set(range(1, 8)) | {250, 251, 252, 253, 255}
         assert 0 <= conf.min() and conf.max() <= 1.0001
 
 
@@ -67,3 +67,13 @@ def test_model_requires_dem(trained_bundle, small_scene):
     bundle = ModelBundle(trained_bundle[0])
     with pytest.raises(ValueError, match="DEM"):
         bundle.predict(load_scene(small_scene["scene"]), "rf")
+
+
+def test_blockwise_classification_matches_single_block(trained_bundle, small_scene, tmp_path):
+    """Processing in small blocks (with halo) must give the same map as one big block."""
+    a = classify_scene(trained_bundle[0], small_scene["scene"], tmp_path / "a", "cnn", small_scene["dem"], block=1024)
+    b = classify_scene(trained_bundle[0], small_scene["scene"], tmp_path / "b", "cnn", small_scene["dem"], block=48)
+    with rasterio.open(tmp_path / "a" / "classified.tif") as s1, rasterio.open(tmp_path / "b" / "classified.tif") as s2:
+        la, lb = s1.read(1), s2.read(1)
+    assert (la == lb).mean() > 0.995
+    assert a["area_stats"] == b["area_stats"] or abs(a["mean_confidence"] - b["mean_confidence"]) < 0.01

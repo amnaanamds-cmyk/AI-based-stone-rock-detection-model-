@@ -1,0 +1,192 @@
+"""PDF report generation for regions and single-scene classifications."""
+from __future__ import annotations
+
+import json
+import textwrap
+import time
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+
+from . import __version__
+from .config import ALL_CLASSES, CLASS_IDS, CLOUD_CLASS
+
+
+def _plt():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    return plt
+
+
+def _table(ax, rows, header, col_widths=None, fontsize=8.5):
+    ax.axis("off")
+    t = ax.table(cellText=rows, colLabels=header, loc="upper center", cellLoc="left", colLoc="left",
+                 colWidths=col_widths)
+    t.auto_set_font_size(False)
+    t.set_fontsize(fontsize)
+    t.scale(1, 1.35)
+    for (r, _c), cell in t.get_celld().items():
+        cell.set_edgecolor("#cccccc")
+        if r == 0:
+            cell.set_facecolor("#efe9df")
+            cell.set_text_props(weight="bold")
+    return t
+
+
+def region_report(region, out_path, model_meta: Optional[dict] = None, stats: Optional[dict] = None,
+                  organisation: str = "") -> Path:
+    """Multi-page PDF: map, area statistics, district table, model accuracy, data & method."""
+    import rasterio
+    from matplotlib.backends.backend_pdf import PdfPages
+    from matplotlib.patches import Patch
+
+    from .mapping import colorize
+    plt = _plt()
+    out_path = Path(out_path)
+    stats = stats or region.statistics()
+    st = region.state()
+    cfg = region.config
+    lith = region.folder / "mosaic" / "lithology.tif"
+    hill = region.folder / "mosaic" / "hillshade.tif"
+
+    with PdfPages(out_path) as pdf:
+        # --- page 1: map -------------------------------------------------------------
+        fig = plt.figure(figsize=(11.69, 8.27))  # A4 landscape
+        fig.suptitle(f"Lithological map - {cfg.name}", fontsize=16, weight="bold", x=0.02, ha="left", y=0.97)
+        sub = (f"RockMap v{__version__} - generated {time.strftime('%d %B %Y')}"
+               + (f" - {organisation}" if organisation else ""))
+        fig.text(0.02, 0.915, sub, fontsize=9, color="#555")
+        ax = fig.add_axes([0.02, 0.05, 0.68, 0.84])
+        ax.axis("off")
+        if lith.exists():
+            with rasterio.open(lith) as src:
+                scale = max(1.0, max(src.width, src.height) / 2200)
+                shape = (int(src.height / scale), int(src.width / scale))
+                lab = src.read(1, out_shape=shape)
+            base = None
+            if hill.exists():
+                with rasterio.open(hill) as src:
+                    base = src.read(1, out_shape=shape)
+            if base is not None:
+                ax.imshow(np.ma.masked_equal(base, 0), cmap="gray", interpolation="bilinear")
+            rgba = colorize(lab)
+            rgba[..., 3] = np.where(lab > 0, 215, 0)
+            ax.imshow(rgba, interpolation="nearest")
+            present = [c for c in ALL_CLASSES if c != CLOUD_CLASS and (lab == c).any()]
+            handles = [Patch(facecolor=ALL_CLASSES[c].color, edgecolor="#333", label=ALL_CLASSES[c].name)
+                       for c in present]
+            fig.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.72, 0.88), fontsize=9,
+                       frameon=False, title="Legend", title_fontsize=10)
+        else:
+            ax.text(0.5, 0.5, "Mosaic not built yet", ha="center")
+        s = region.summary()
+        info = [f"Area of interest: {s['area_km2']:,.0f} km2 grid, {s['tiles']} tiles",
+                f"Classified tiles: {s['classified']} / {s['tiles']}",
+                f"Resolution: {cfg.resolution:g} m, CRS EPSG:{cfg.epsg}",
+                f"Imagery: Sentinel-2 L2A, {min(cfg.years)}-{max(cfg.years)}, months {', '.join(map(str, cfg.months))}"
+                if cfg.source == "sentinel2" else "Imagery: user-supplied scenes",
+                f"Algorithm: {st.get('algorithm', '-')}"]
+        fig.text(0.72, 0.30, "\n".join(info), fontsize=8.5, va="top", family="monospace")
+        fig.text(0.72, 0.07, textwrap.fill(
+            "Disclaimer: automated remote-sensing classification of surface lithology. Accuracy depends on "
+            "the reference data used for training; verify in the field before engineering, mining or legal use.",
+            60), fontsize=7.5, color="#666")
+        pdf.savefig(fig)
+        plt.close(fig)
+
+        # --- page 2: statistics ------------------------------------------------------
+        fig = plt.figure(figsize=(8.27, 11.69))
+        fig.suptitle("Area statistics", fontsize=15, weight="bold", x=0.06, ha="left", y=0.97)
+        rock = [r for r in stats["region"] if r["id"] in CLASS_IDS]
+        masks = [r for r in stats["region"] if r["id"] not in CLASS_IDS]
+        ax = fig.add_axes([0.32, 0.62, 0.6, 0.3])
+        ax.barh([r["name"] for r in rock][::-1], [r["area_km2"] for r in rock][::-1],
+                color=[r["color"] for r in rock][::-1], edgecolor="#333")
+        ax.set_xlabel("km2")
+        ax.spines[["top", "right"]].set_visible(False)
+        ax2 = fig.add_axes([0.06, 0.18, 0.88, 0.38])
+        rows = [[r["name"], f"{r['area_km2']:,.2f}", f"{r['percent']:.1f}" if r["percent"] is not None else "-"]
+                for r in rock + masks]
+        _table(ax2, rows, ["Class", "Area (km2)", "% of rock"], [0.55, 0.22, 0.2])
+        pdf.savefig(fig)
+        plt.close(fig)
+
+        # --- page 3: districts -------------------------------------------------------
+        if stats.get("districts"):
+            fig = plt.figure(figsize=(11.69, 8.27))
+            fig.suptitle("Lithology by district (km2)", fontsize=15, weight="bold", x=0.03, ha="left", y=0.97)
+            ax = fig.add_axes([0.03, 0.05, 0.94, 0.85])
+            short = [ALL_CLASSES[c].name.split(" /")[0].split(" (")[0] for c in CLASS_IDS]
+            rows = []
+            for d in stats["districts"]:
+                by = {r["id"]: r["area_km2"] for r in d["stats"]}
+                rows.append([d["name"]] + [f"{by.get(c, 0):,.1f}" for c in CLASS_IDS] + [f"{d['km2']:,.0f}"])
+            _table(ax, rows, ["District"] + short + ["Total"], fontsize=7.5)
+            pdf.savefig(fig)
+            plt.close(fig)
+
+        # --- page 4: model -----------------------------------------------------------
+        if model_meta:
+            fig = plt.figure(figsize=(8.27, 11.69))
+            fig.suptitle("Model accuracy (held-out spatial test blocks)", fontsize=14, weight="bold",
+                         x=0.06, ha="left", y=0.97)
+            ax = fig.add_axes([0.06, 0.72, 0.88, 0.2])
+            rows = [[m["label"], f"{m['test_metrics']['overall_accuracy'] * 100:.2f}%",
+                     f"{m['test_metrics']['kappa']:.3f}", f"{m['test_metrics']['macro_f1']:.3f}",
+                     f"{m['test_metrics']['n_samples']:,}"] for m in model_meta["algorithms"].values()]
+            _table(ax, rows, ["Algorithm", "Overall accuracy", "Kappa", "Macro F1", "Test pixels"])
+            best = max(model_meta["algorithms"].values(), key=lambda m: m["test_metrics"]["kappa"])
+            cm = np.asarray(best["test_metrics"]["confusion_matrix"], float)
+            norm = cm / np.maximum(cm.sum(1, keepdims=True), 1)
+            ax = fig.add_axes([0.25, 0.25, 0.6, 0.4])
+            ax.imshow(norm, cmap="Blues", vmin=0, vmax=1)
+            names = [ALL_CLASSES[c].name.split(" /")[0].split(" (")[0] for c in best["test_metrics"]["classes"]]
+            ax.set_xticks(range(len(names)), names, rotation=40, ha="right", fontsize=8)
+            ax.set_yticks(range(len(names)), names, fontsize=8)
+            ax.set_title(f"Confusion matrix - {best['label']}", fontsize=10)
+            for i in range(len(names)):
+                for j in range(len(names)):
+                    if cm[i, j]:
+                        ax.text(j, i, f"{norm[i, j]:.2f}", ha="center", va="center", fontsize=7,
+                                color="white" if norm[i, j] > 0.5 else "black")
+            fig.text(0.06, 0.12, textwrap.fill(
+                f"Training pixels: {model_meta.get('n_train', 0):,}; validation {model_meta.get('n_val', 0):,}; "
+                f"test {model_meta.get('n_test', 0):,}. Features: {', '.join(model_meta.get('feature_names', []))}.",
+                110), fontsize=8)
+            pdf.savefig(fig)
+            plt.close(fig)
+
+        # --- page 5: method & data ---------------------------------------------------
+        fig = plt.figure(figsize=(8.27, 11.69))
+        fig.suptitle("Data and method", fontsize=15, weight="bold", x=0.06, ha="left", y=0.97)
+        dates = sorted({d for t in st["tiles"].values() for d in t.get("dates", [])})
+        text = [
+            "Imagery: Copernicus Sentinel-2 Level-2A surface reflectance (AWS Open Data, sentinel-cogs), "
+            f"{len(dates)} acquisition dates" + (f" between {dates[0]} and {dates[-1]}." if dates else "."),
+            "Elevation: Copernicus DEM GLO-30 (AWS Open Data).",
+            "Pre-processing: cloud / shadow removal with the Scene Classification Layer, topographic "
+            "C-correction, per-pixel median composite of the least-cloudy scenes; snow observations are used only "
+            "where no snow-free observation exists.",
+            "Masks: snow / glacier (NDSI), water, dense vegetation (NDVI) and deep terrain shadow are mapped as "
+            "separate non-rock classes.",
+            "Features: 6 reflectance bands, 7 spectral indices (clay, carbonate, iron-oxide, ferrous, NDVI, "
+            "brightness, bare-rock) and 6 terrain features (elevation, slope, aspect, hillshade, roughness).",
+            "Classifier: fully convolutional CNN (9 x 9 px context) benchmarked against Random Forest and SVM; "
+            "spatially blocked train / validation / test split.",
+            "Contains modified Copernicus Sentinel data and Copernicus DEM (ESA / European Union).",
+        ]
+        y = 0.9
+        for para in text:
+            wrapped = textwrap.fill(para, 95)
+            fig.text(0.06, y, wrapped, fontsize=9, va="top")
+            y -= 0.025 * (wrapped.count("\n") + 1) + 0.015
+        pdf.savefig(fig)
+        plt.close(fig)
+    return out_path
+
+
+def load_meta(model_dir) -> Optional[dict]:
+    p = Path(model_dir) / "meta.json"
+    return json.loads(p.read_text()) if p.exists() else None

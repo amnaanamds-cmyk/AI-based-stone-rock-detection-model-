@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Regions{% endblock %}
+{% block content %}
+<div class="row"><div><h1>Regions</h1>
+<p class="sub">Large-area mapping: imagery is downloaded automatically, processed tile by tile and joined into seamless maps.</p></div>
+<span class="spacer"></span>{% if has_role('analyst') %}<a class="btn" href="{{ url_for('regions.region_new') }}">+ New region</a>{% endif %}</div>
+<div class="card">
+{% if regions %}
+<div class="table-wrap"><table>
+  <tr><th>Region</th><th class="num">Tiles</th><th class="num">Acquired</th><th class="num">Classified</th><th class="num">Grid area</th><th>Created</th></tr>
+  {% for r in regions %}
+  <tr><td><a href="{{ url_for('regions.region_page', region_id=r.id) }}"><b>{{ r.name }}</b></a>{% if r.preset %} <span class="badge">{{ r.preset }}</span>{% endif %}</td>
+  {% if r.summary %}
+    <td class="num">{{ r.summary.tiles }}</td><td class="num">{{ r.summary.acquired }}</td><td class="num">{{ r.summary.classified }}</td>
+    <td class="num">{{ '{:,.0f}'.format(r.summary.area_km2) }} km²</td>
+  {% else %}<td colspan="4" class="muted">unavailable</td>{% endif %}
+  <td class="muted">{{ r.created[:10] }} · {{ r.created_by or '' }}</td></tr>
+  {% endfor %}
+</table></div>
+{% else %}
+<div class="empty">
+  <p>No regions yet.</p>
+  {% if has_role('analyst') %}<p><a class="btn" href="{{ url_for('regions.region_new') }}">Create the Gilgit-Baltistan region</a></p>{% endif %}
+</div>
+{% endif %}
+</div>
+{% endblock %}

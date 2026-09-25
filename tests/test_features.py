@@ -65,8 +65,8 @@ def test_cloud_masks():
     refl[:, 1, 1] = [0.27, 0.31, 0.35, 0.39, 0.46, 0.36]      # bright limestone must survive
     m = hot_cloud_mask(refl)
     assert m[0, 0] and not m[1, 1]
-    assert scl_mask(np.array([[4, 9], [3, 5]])).tolist() == [[False, True], [True, False]]
-    assert landsat_qa_mask(np.array([21824, 1 << 3])).tolist() == [False, True]
+    assert scl_mask(np.array([[4, 9], [3, 11]])).tolist() == [[False, True], [True, False]]
+    assert landsat_qa_mask(np.array([21824, 1 << 3, 1 << 5])).tolist() == [False, True, False]
 
 
 def test_preprocess_requires_six_bands():

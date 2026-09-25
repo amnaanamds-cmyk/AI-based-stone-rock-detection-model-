@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+{% block content %}
+<div style="max-width: 380px; margin: 8vh auto 0">
+  <form class="card" method="post">{{ csrf_field() }}
+    <h1 style="margin-bottom: 4px">Sign in</h1>
+    <p class="sub">RockMap geological mapping platform</p>
+    <label for="username">Username</label>
+    <input type="text" id="username" name="username" autocomplete="username" required autofocus>
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" autocomplete="current-password" required>
+    <p style="margin-top: 18px"><button class="btn" style="width: 100%; justify-content: center">Sign in</button></p>
+    <p class="hint">First start: the administrator password is printed in the server console and saved in <span class="mono">initial_admin_password.txt</span> in the data folder.</p>
+  </form>
+</div>
+{% endblock %}

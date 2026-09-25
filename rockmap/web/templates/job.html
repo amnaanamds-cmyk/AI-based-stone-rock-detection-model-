@@ -3,8 +3,8 @@
 {% block title %}Job #{{ job.id }}{% endblock %}
 {% block head %}
 {% if result and result.bounds_wgs84 %}
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
+<script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
 {% endif %}
 {% endblock %}
 {% block content %}
@@ -16,10 +16,15 @@
 {% if job.status in ('queued', 'running') %}
 <div class="card" id="job-progress" data-api="{{ url_for('api_job', job_id=job.id) }}">
   <div class="progress"><span style="width: {{ (job.progress * 100)|round|int }}%"></span></div>
-  <p class="msg muted mono" style="margin: 10px 0 0">{{ job.message }}</p>
+  <div class="row" style="margin-top: 10px"><p class="msg muted mono" style="margin: 0">{{ job.message }}</p><span class="spacer"></span>
+  {% if has_role('analyst') %}<form class="inline" method="post" action="{{ url_for('cancel_job', job_id=job.id) }}">{{ csrf_field() }}<button class="btn small danger">Cancel</button></form>{% endif %}</div>
+  <pre class="log" data-log>{{ log_tail }}</pre>
 </div>
 {% elif job.status == 'failed' %}
 <div class="flash error"><b>Job failed.</b> {{ job.error }}</div>
+{% if log_tail %}<details class="card"><summary>Job log</summary><pre class="log">{{ log_tail }}</pre></details>{% endif %}
+{% elif job.status == 'cancelled' %}
+<div class="flash error">Job cancelled.</div>
 
 {% elif result %}
 {% set f = job.folder %}

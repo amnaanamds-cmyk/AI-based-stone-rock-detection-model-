@@ -107,3 +107,29 @@ img.figure { max-width: 100%; border-radius: 6px; border: 1px solid var(--line);
 svg.chart text { fill: var(--muted); font-size: 11px; }
 svg.chart .grid { stroke: var(--line); }
 footer { text-align: center; color: var(--muted); font-size: 12px; padding: 24px; }
+
+/* ---- platform additions ---- */
+header.top .user { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+main.wide { max-width: none; padding: 16px 16px 24px; }
+.region-layout { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 16px; align-items: start; }
+@media (max-width: 1000px) { .region-layout { grid-template-columns: 1fr; } }
+.map-card { padding: 10px; position: sticky; top: 70px; }
+@media (max-width: 1000px) { .map-card { position: static; } }
+#region-map { height: calc(100vh - 230px); min-height: 420px; border-radius: 8px; }
+.map-tools { margin-top: 8px; }
+.side-panel { display: grid; gap: 12px; }
+.side-panel .card { padding: 14px 16px; }
+details { border-top: 1px solid var(--line); padding: 8px 0; }
+details:first-of-type { border-top: 0; }
+details > summary { cursor: pointer; padding: 2px 0; }
+details form { margin-top: 6px; }
+hr { border: 0; border-top: 1px dashed var(--line); margin: 12px 0; }
+pre.log { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font: 12px/1.45 var(--mono);
+  max-height: 260px; overflow: auto; white-space: pre-wrap; margin: 10px 0 0; }
+.job-live { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.job-live .msg { margin: 6px 0 0; font-size: 12px; }
+.badge.cancelled { color: var(--muted); }
+.leaflet-container { font: inherit; background: #d9d4c7; }
+.leaflet-popup-content { font-size: 13px; line-height: 1.5; }
+
+[hidden] { display: none !important; }
