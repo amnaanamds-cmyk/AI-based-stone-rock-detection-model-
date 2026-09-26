@@ -16,7 +16,7 @@ from .io import class_colormap, read_raster, write_raster
 def _read_features(vector_path: Path) -> tuple[list[dict], Optional[str]]:
     """Return GeoJSON-like features and the source CRS (None = EPSG:4326 for GeoJSON)."""
     if vector_path.suffix.lower() in (".geojson", ".json"):
-        data = json.loads(vector_path.read_text())
+        data = json.loads(vector_path.read_text(encoding="utf-8"))
         crs = data.get("crs", {}).get("properties", {}).get("name")
         return data["features"], crs or "EPSG:4326"
     try:

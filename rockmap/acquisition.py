@@ -231,14 +231,14 @@ class S2Catalog:
         item_id = prefix.rstrip("/").split("/")[-1]
         cache = self.cache_dir / "items" / f"{item_id}.json" if self.cache_dir else None
         if cache and cache.exists():
-            return json.loads(cache.read_text())
+            return json.loads(cache.read_text(encoding="utf-8"))
         try:
             d = json.loads(http_get(f"{S2_BUCKET}/{prefix}{item_id}.json"))
         except FileNotFoundError:
             return None
         if cache:
             cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_text(json.dumps(d))
+            cache.write_text(json.dumps(d), encoding="utf-8")
         return d
 
     def _s3_search(self, bbox, season: Season) -> list[S2Item]:

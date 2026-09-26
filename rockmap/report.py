@@ -242,4 +242,4 @@ def region_report(region, out_path, model_meta: Optional[dict] = None, stats: Op
 
 def load_meta(model_dir) -> Optional[dict]:
     p = Path(model_dir) / "meta.json"
-    return json.loads(p.read_text()) if p.exists() else None
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None

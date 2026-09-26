@@ -30,7 +30,7 @@ def _new_region(db, root: Path, name: str, cfg, preset=None) -> int:
     rid = db.insert("regions", name=name, folder="", preset=preset, created_by="admin")
     folder = root / "regions" / str(rid)
     Region.create(folder, cfg)
-    db.update("regions", rid, folder=str(folder.relative_to(root)), bounds=list(_geom_bounds(cfg.aoi)),
+    db.update("regions", rid, folder=folder.relative_to(root).as_posix(), bounds=list(_geom_bounds(cfg.aoi)),
               share_token=secrets.token_urlsafe(18))
     return rid
 
@@ -54,7 +54,7 @@ def _run(db, root: Path, kind: str, params: dict, **cols) -> dict:
     return job
 
 
-def build_demo(root: Path, real: bool = False, progress: Callable = _noop) -> None:
+def build_demo(root: Path, real: bool = False, progress: Callable = _noop, size: int = 512, epochs: int = 12) -> None:
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     fresh = not (root / "rockmap.db").exists()
@@ -64,7 +64,7 @@ def build_demo(root: Path, real: bool = False, progress: Callable = _noop) -> No
     app = create_app(root, sync_jobs=True, workers=0)
     db = app.extensions["rockmap_db"]
     if not db.one("regions", "name = ?", (DEMO_NAME,)):
-        _synthetic_region(db, root, progress)
+        _synthetic_region(db, root, progress, size, epochs)
     else:
         progress(1.0, "Demo region already present")
     if real and not db.one("regions", "name = ?", (REAL_NAME,)):
@@ -79,7 +79,7 @@ def build_demo(root: Path, real: bool = False, progress: Callable = _noop) -> No
     print("=" * 68 + "\n", flush=True)
 
 
-def _synthetic_region(db, root: Path, progress: Callable) -> None:
+def _synthetic_region(db, root: Path, progress: Callable, size: int = 512, epochs: int = 12) -> None:
     from rasterio.features import shapes
     from rasterio.warp import transform_geom
 
@@ -87,11 +87,11 @@ def _synthetic_region(db, root: Path, progress: Callable) -> None:
     from .region import RegionConfig
     from .synthetic import write_scene
     progress(0.02, "Generating synthetic study area")
-    src = write_scene(root / "demo_source", 512, 512, seed=11, cloud_cover=0.02)
+    src = write_scene(root / "demo_source", size, size, seed=11, cloud_cover=0.02)
     _, info = read_raster(src["scene"], bands=[1])
     w, s, e, n = info.wgs84_bounds()
     aoi = {"type": "Polygon", "coordinates": [[[w, s], [e, s], [e, n], [w, n], [w, s]]]}
-    cfg = RegionConfig(name=DEMO_NAME, aoi=aoi, tile_size=256, source="local", local_scenes=[str(src["scene"])],
+    cfg = RegionConfig(name=DEMO_NAME, aoi=aoi, tile_size=max(128, size // 2), source="local", local_scenes=[str(src["scene"])],
                        local_sensor="reflectance", local_dem=str(src["dem"]))
     rid = _new_region(db, root, DEMO_NAME, cfg, "demo")
     folder = root / "regions" / str(rid)
@@ -107,10 +107,10 @@ def _synthetic_region(db, root: Path, progress: Callable) -> None:
                           "properties": {"UNIT": int(val)}})
     (folder / "references").mkdir(exist_ok=True)
     (folder / "references" / "ref1_demo_geology.geojson").write_text(
-        json.dumps({"type": "FeatureCollection", "features": feats}))
+        json.dumps({"type": "FeatureCollection", "features": feats}), encoding="utf-8")
     (folder / "references" / "index.json").write_text(json.dumps([{
         "file": "ref1_demo_geology.geojson", "name": "demo_geology.geojson", "field": "UNIT", "mapping": None,
-        "polygons": len(feats), "by": "admin"}]))
+        "polygons": len(feats), "by": "admin"}]), encoding="utf-8")
 
     # district boundaries (two halves) for per-district statistics
     mid = (s + n) / 2
@@ -119,8 +119,8 @@ def _synthetic_region(db, root: Path, progress: Callable) -> None:
          "geometry": {"type": "Polygon", "coordinates": [[[w, mid], [e, mid], [e, n], [w, n], [w, mid]]]}},
         {"type": "Feature", "properties": {"name": "South district"},
          "geometry": {"type": "Polygon", "coordinates": [[[w, s], [e, s], [e, mid], [w, mid], [w, s]]]}}]}
-    (folder / "districts.geojson").write_text(json.dumps(districts))
-    (folder / "districts.json").write_text(json.dumps({"field": "name"}))
+    (folder / "districts.geojson").write_text(json.dumps(districts), encoding="utf-8")
+    (folder / "districts.json").write_text(json.dumps({"field": "name"}), encoding="utf-8")
 
     # field observations in the eastern part (not covered by the reference map) for validation
     from rasterio.warp import transform
@@ -136,7 +136,7 @@ def _synthetic_region(db, root: Path, progress: Callable) -> None:
                   certainty=1, note="demo field check (not used for training)", author="demo-geologist")
 
     progress(0.1, "Running the full region pipeline (acquire → analytics → train → classify → products)")
-    _run(db, root, "region_pipeline", {"algorithms": ["cnn", "rf", "svm"], "epochs": 12, "samples": 2000,
+    _run(db, root, "region_pipeline", {"algorithms": ["cnn", "rf", "svm"], "epochs": epochs, "samples": 2000,
                                        "smoothing": 3, "n_clusters": 8, "geojson": True, "min_pixels": 25,
                                        "name": "Demo valley model (CNN + RF + SVM)"}, region_id=rid)
     progress(0.95, "Demo region complete")

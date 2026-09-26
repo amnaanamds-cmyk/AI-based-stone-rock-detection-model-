@@ -31,7 +31,8 @@ def _failures() -> dict[str, list[float]]:
     return current_app.extensions.setdefault("rockmap_login_failures", defaultdict(list))
 
 
-def create_user(db: Database, username: str, password: str, role: str = "analyst") -> int:
+def create_user(db: Database, username: str, password: str, role: str = "analyst",
+                must_change: bool = False) -> int:
     username = username.strip()
     if role not in ROLES:
         raise ValueError(f"role must be one of {ROLES}")
@@ -41,13 +42,33 @@ def create_user(db: Database, username: str, password: str, role: str = "analyst
         raise ValueError("password must have at least 8 characters")
     if db.one("users", "username = ?", (username,)):
         raise ValueError(f"user '{username}' already exists")
-    return db.insert("users", username=username, password_hash=generate_password_hash(password), role=role)
+    return db.insert("users", username=username, password_hash=generate_password_hash(password), role=role,
+                     must_change=int(must_change))
 
 
-def set_password(db: Database, user_id: int, password: str) -> None:
+def set_password(db: Database, user_id: int, password: str, must_change: bool = False) -> None:
     if len(password) < 8:
         raise ValueError("password must have at least 8 characters")
-    db.update("users", user_id, password_hash=generate_password_hash(password))
+    if password.lower() in WEAK_PASSWORDS:
+        raise ValueError("this password is too common - choose another one")
+    db.update("users", user_id, password_hash=generate_password_hash(password), must_change=int(must_change))
+
+
+WEAK_PASSWORDS = {"rockmap-demo", "password", "password1", "12345678", "123456789", "admin123", "qwerty123",
+                  "rockmap123", "11111111", "iloveyou"}
+
+
+def require_password_change() -> Optional["Response"]:
+    """Users with a temporary password may only change it (or sign out) until they do."""
+    user = g.get("user")
+    if not user or g.get("api") or not user.get("must_change"):
+        return None
+    if request.endpoint in ("profile", "logout", "static", "login", "healthz") or request.path.startswith("/share/"):
+        return None
+    if request.path.startswith("/api/") or request.path.startswith("/tiles/"):
+        return make_response(jsonify(error="password change required"), 403)
+    flash("Please choose a new password before continuing.", "error")
+    return redirect(url_for("profile"))
 
 
 def _hash_token(token: str) -> str:

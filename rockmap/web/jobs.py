@@ -48,7 +48,7 @@ class JobContext:
         return self.job["params"] or {}
 
     def log(self, msg: str) -> None:
-        with open(self.log_path, "a") as fh:
+        with open(self.log_path, "a", encoding="utf-8") as fh:
             fh.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
 
     def progress(self, p: float, msg: str) -> None:

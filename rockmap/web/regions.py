@@ -43,7 +43,7 @@ def _region(row: dict, root: Path | None = None) -> Region:
 
 def _references(region: Region) -> list[dict]:
     p = region.folder / "references" / "index.json"
-    return json.loads(p.read_text()) if p.exists() else []
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
 
 
 def _training_features(db: Database, region: Region, region_id: int) -> tuple[list, dict]:
@@ -66,7 +66,7 @@ def _training_features(db: Database, region: Region, region_id: int) -> tuple[li
 
 def _stats(region: Region) -> dict | None:
     p = region.folder / "products" / "stats.json"
-    return json.loads(p.read_text()) if p.exists() else None
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
 
 # ----------------------------------------------------------------------------- job handlers
@@ -91,10 +91,10 @@ def _do_train(ctx, region: Region, a=0.0, b=1.0) -> int:
                         int(p.get("epochs", 30)), name=name, progress=_scaled(ctx, a, b), log=ctx.log)
     from .app import model_summary
     summary, best = model_summary(meta)
-    model_id = db.insert("models", name=name, folder=str(folder.relative_to(ctx.root)),
+    model_id = db.insert("models", name=name, folder=folder.relative_to(ctx.root).as_posix(),
                          region_id=ctx.job["region_id"], uses_dem=int(meta["uses_dem"]), best_algo=best,
                          summary=summary, created_by=ctx.job["user"])
-    db.update("jobs", ctx.job["id"], model_id=model_id, folder=str(folder.relative_to(ctx.root)))
+    db.update("jobs", ctx.job["id"], model_id=model_id, folder=folder.relative_to(ctx.root).as_posix())
     return model_id
 
 
@@ -115,11 +115,11 @@ def _do_products(ctx, region: Region, a=0.0, b=1.0):
     region.build_mosaics(_scaled(ctx, a, a + (b - a) * 0.6))
     ctx.progress(a + (b - a) * 0.65, "Computing statistics")
     dfile = region.folder / "districts.geojson"
-    districts = json.loads(dfile.read_text()) if dfile.exists() else None
-    name_field = (json.loads((region.folder / "districts.json").read_text()).get("field", "name")
+    districts = json.loads(dfile.read_text(encoding="utf-8")) if dfile.exists() else None
+    name_field = (json.loads((region.folder / "districts.json").read_text(encoding="utf-8")).get("field", "name")
                   if (region.folder / "districts.json").exists() else "name")
     stats = region.statistics(districts, name_field)
-    (out / "stats.json").write_text(json.dumps(stats, indent=2))
+    (out / "stats.json").write_text(json.dumps(stats, indent=2), encoding="utf-8")
     if ctx.params.get("geojson", True):
         region.export_geojson(out / "lithology.geojson", int(ctx.params.get("min_pixels", 25)),
                               progress=_scaled(ctx, a + (b - a) * 0.7, a + (b - a) * 0.9))
@@ -248,7 +248,7 @@ def region_new():
         folder = _root() / "regions" / str(rid)
         region = Region.create(folder, cfg)
         from ..region import _geom_bounds
-        db.update("regions", rid, folder=str(folder.relative_to(_root())), bounds=list(_geom_bounds(geom)))
+        db.update("regions", rid, folder=folder.relative_to(_root()).as_posix(), bounds=list(_geom_bounds(geom)))
     except (ValueError, KeyError, json.JSONDecodeError) as e:
         flash(f"Could not create region: {e}", "error")
         return redirect(url_for("regions.region_new"))
@@ -345,7 +345,7 @@ def region_reference(region_id):
         refdir.mkdir(exist_ok=True)
         refs = _references(region)
         fname = f"ref{len(refs) + 1}_{secure_filename(up.filename) or 'map.geojson'}"
-        (refdir / fname).write_text(json.dumps(data))
+        (refdir / fname).write_text(json.dumps(data), encoding="utf-8")
         from ..reference import load_reference_features
         n = len(load_reference_features(refdir / fname, field, mapping))
         if n == 0:
@@ -353,7 +353,7 @@ def region_reference(region_id):
             raise ValueError(f"no polygon could be mapped to a rock class (field '{field}')")
         refs.append({"file": fname, "name": up.filename, "field": field, "mapping": mapping, "polygons": n,
                      "by": g.user["username"]})
-        (refdir / "index.json").write_text(json.dumps(refs, indent=2))
+        (refdir / "index.json").write_text(json.dumps(refs, indent=2), encoding="utf-8")
         audit("region.reference", f"{region_id} {up.filename} ({n} polygons)")
         flash(f"Reference map added: {n} usable polygons.", "ok")
     except (ValueError, json.JSONDecodeError, KeyError) as e:
@@ -369,7 +369,7 @@ def region_reference_delete(region_id, idx):
     if 0 <= idx < len(refs):
         ref = refs.pop(idx)
         (region.folder / "references" / ref["file"]).unlink(missing_ok=True)
-        (region.folder / "references" / "index.json").write_text(json.dumps(refs, indent=2))
+        (region.folder / "references" / "index.json").write_text(json.dumps(refs, indent=2), encoding="utf-8")
         audit("region.reference.delete", f"{region_id} {ref['name']}")
     return redirect(url_for("regions.region_page", region_id=region_id))
 
@@ -383,8 +383,8 @@ def region_districts(region_id):
         data = json.loads(up.read()) if up and up.filename else None
         if not data or data.get("type") != "FeatureCollection":
             raise ValueError("upload a GeoJSON FeatureCollection of district polygons")
-        (region.folder / "districts.geojson").write_text(json.dumps(data))
-        (region.folder / "districts.json").write_text(json.dumps({"field": request.form.get("field") or "name"}))
+        (region.folder / "districts.geojson").write_text(json.dumps(data), encoding="utf-8")
+        (region.folder / "districts.json").write_text(json.dumps({"field": request.form.get("field") or "name"}), encoding="utf-8")
         audit("region.districts", f"{region_id} ({len(data['features'])} districts)")
         flash(f"{len(data['features'])} districts saved. Run 'Build products' to compute district statistics.", "ok")
     except (ValueError, json.JSONDecodeError) as e:
@@ -607,11 +607,11 @@ def _tilegrid(region: Region):
     cache = region.folder / "cache" / "tilegrid.json"
     state_mtime = (region.folder / "state.json").stat().st_mtime
     if cache.exists() and cache.stat().st_mtime >= state_mtime:
-        return Response(cache.read_text(), mimetype="application/json")
+        return Response(cache.read_text(encoding="utf-8"), mimetype="application/json")
     data = region.tile_geojson()
     data["aoi"] = region.config.aoi
     cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps(data))
+    cache.write_text(json.dumps(data), encoding="utf-8")
     return jsonify(data)
 
 
@@ -631,7 +631,7 @@ def _targets(region: Region):
     p = region.folder / "products" / "targets.geojson"
     if not p.exists():
         return jsonify({"type": "FeatureCollection", "features": []})
-    return Response(p.read_text(), mimetype="application/json")
+    return Response(p.read_text(encoding="utf-8"), mimetype="application/json")
 
 
 def _query(region: Region):

@@ -57,6 +57,15 @@ def _open(path: Path, level: int):
         return _vrt_cache[key]
 
 
+def release(prefix: Path | str) -> None:
+    """Close cached handles of mosaics under ``prefix`` (Windows cannot replace open files)."""
+    prefix = str(prefix)
+    with _vrt_lock:
+        for key in [k for k in _vrt_cache if k.startswith(prefix)]:
+            src, _lock = _vrt_cache.pop(key)
+            src.close()
+
+
 def _pick_level(path: Path, tile_px_m: float) -> int:
     src, _ = _open(path, -1)
     res = abs(src.transform.a)

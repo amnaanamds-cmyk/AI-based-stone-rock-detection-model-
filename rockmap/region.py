@@ -116,8 +116,8 @@ class Region:
 
     def __init__(self, folder: str | Path):
         self.folder = Path(folder)
-        self.config = RegionConfig(**json.loads((self.folder / "region.json").read_text()))
-        g = json.loads((self.folder / "grid.json").read_text())
+        self.config = RegionConfig(**json.loads((self.folder / "region.json").read_text(encoding="utf-8")))
+        g = json.loads((self.folder / "grid.json").read_text(encoding="utf-8"))
         self.crs = CRS.from_epsg(g["epsg"])
         self.transform = Affine(*g["transform"])
         self.width, self.height = g["width"], g["height"]
@@ -144,9 +144,9 @@ class Region:
         grid = {"epsg": config.epsg, "transform": list(Affine(config.resolution, 0, ox, 0, -config.resolution, oy))[:6],
                 "width": ncols * config.tile_size, "height": nrows * config.tile_size, "tiles": tiles,
                 "aoi_projected": aoi}
-        (folder / "region.json").write_text(json.dumps(asdict(config), indent=2))
-        (folder / "grid.json").write_text(json.dumps(grid))
-        (folder / "state.json").write_text(json.dumps({"tiles": {}, "log": []}))
+        (folder / "region.json").write_text(json.dumps(asdict(config), indent=2), encoding="utf-8")
+        (folder / "grid.json").write_text(json.dumps(grid), encoding="utf-8")
+        (folder / "state.json").write_text(json.dumps({"tiles": {}, "log": []}), encoding="utf-8")
         return cls(folder)
 
     # -- grid helpers -----------------------------------------------------------------
@@ -168,7 +168,7 @@ class Region:
 
     @property
     def aoi_projected(self) -> dict:
-        return json.loads((self.folder / "grid.json").read_text())["aoi_projected"]
+        return json.loads((self.folder / "grid.json").read_text(encoding="utf-8"))["aoi_projected"]
 
     def aoi_mask(self, info: GeoInfo) -> np.ndarray:
         return rasterize([(self.aoi_projected, 1)], out_shape=(info.height, info.width),
@@ -193,23 +193,28 @@ class Region:
     # -- state ------------------------------------------------------------------------
     def state(self) -> dict:
         p = self.folder / "state.json"
-        return json.loads(p.read_text()) if p.exists() else {"tiles": {}, "log": []}
+        for i in range(40):   # the file may be mid-replace (Windows raises PermissionError)
+            try:
+                return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {"tiles": {}, "log": []}
+            except (PermissionError, json.JSONDecodeError):
+                time.sleep(0.05 * (i + 1))
+        raise RuntimeError(f"cannot read {p}")
 
     def _update_tile(self, key: str, **values) -> None:
         with self._lock:
             st = self.state()
             st["tiles"].setdefault(key, {}).update(values)
-            tmp = self.folder / "state.json.tmp"
-            tmp.write_text(json.dumps(st))
-            tmp.replace(self.folder / "state.json")
+            tmp = self.folder / f"state.json.{threading.get_ident()}.tmp"
+            tmp.write_text(json.dumps(st), encoding="utf-8")
+            replace_file(tmp, self.folder / "state.json")
 
     def _set(self, **values) -> None:
         with self._lock:
             st = self.state()
             st.update(values)
-            tmp = self.folder / "state.json.tmp"
-            tmp.write_text(json.dumps(st))
-            tmp.replace(self.folder / "state.json")
+            tmp = self.folder / f"state.json.{threading.get_ident()}.tmp"
+            tmp.write_text(json.dumps(st), encoding="utf-8")
+            replace_file(tmp, self.folder / "state.json")
 
     def summary(self) -> dict:
         st = self.state()["tiles"]
@@ -272,7 +277,7 @@ class Region:
             stack[:, ~inside] = 0
         write_composite(d / "stack.tif", stack, tile.info, rep)
         meta = {"composite": rep.to_dict(), "seconds": round(time.time() - t0, 1)}
-        (d / "meta.json").write_text(json.dumps(meta, indent=2))
+        (d / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
         self._update_tile(tile.key, acquired=True, error=None, clear=round(rep.clear_fraction, 3),
                           scenes=len(rep.items), dates=rep.dates, sun=[rep.sun_azimuth, rep.sun_elevation])
 
@@ -407,6 +412,8 @@ class Region:
             if not keys:
                 continue
             path = out / f"{name}.tif"
+            final = path
+            path = out / f"{name}.building.tif"   # build aside, then swap in (open handles on Windows)
             prof = dict(driver="GTiff", width=self.width, height=self.height, count=count, dtype="uint8",
                         crs=self.crs, transform=self.transform, nodata=0, compress="deflate", tiled=True,
                         blockxsize=512, blockysize=512, BIGTIFF="IF_SAFER")
@@ -424,7 +431,10 @@ class Region:
                           else Resampling.average)
                     dst.build_overviews(factors, rs)
                     dst.update_tags(ns="rio_overview", resampling=rs.name)
-            paths[name] = path
+            from .tiles import release
+            release(final)
+            replace_file(path, final)
+            paths[name] = final
         self._set(mosaic_built=time.strftime("%Y-%m-%d %H:%M:%S"), mosaic_version=int(time.time()))
         progress(1.0, "Mosaics built")
         return paths
@@ -547,7 +557,7 @@ class Region:
         keys = [k for k in self.tile_keys if st.get(k, {}).get("classified")]
         px_ha = (self.config.resolution ** 2) / 1e4
         n = 0
-        with open(out_path, "w") as fh:
+        with open(out_path, "w", encoding="utf-8") as fh:
             fh.write('{"type": "FeatureCollection", "features": [\n')
             for i, k in enumerate(keys):
                 progress(i / max(1, len(keys)), f"Polygonising tile {k}")
@@ -584,7 +594,7 @@ class Region:
 
     def analytics(self) -> Optional[dict]:
         p = self.folder / "products" / "analytics.json"
-        return json.loads(p.read_text()) if p.exists() else None
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
     def analyze(self, n_clusters: int = 10, progress: Progress = _noop, log: Log = print,
                 samples_per_tile: int = 4000, seed: int = 0) -> dict:
@@ -709,7 +719,7 @@ class Region:
                   "hazard_km2": {str(c): round(float(hz_counts[c] * px_km2), 2) for c in HAZARD_CLASSES},
                   "targets_total": len(targets), "top_target": targets[0] if targets else None,
                   "targets_top": targets[:25]}
-        (out / "analytics.json").write_text(json.dumps(result, indent=2))
+        (out / "analytics.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
         self._set(analysed_at=result["created"])
         progress(1.0, f"Analytics complete: {len(targets)} alteration targets, {k} spectral units")
         return result
@@ -741,7 +751,7 @@ class Region:
         for c in info.get("clusters", []):
             c["class_id"] = mapping.get(c["id"])
         if info:
-            (self.folder / "products" / "analytics.json").write_text(json.dumps(info, indent=2))
+            (self.folder / "products" / "analytics.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
         self._set(model=None, algorithm="units", classified_at=time.strftime("%Y-%m-%d %H:%M:%S"))
         progress(1.0, "Lithology map created from labelled spectral units")
         return self.summary()
@@ -762,6 +772,18 @@ class Region:
         m = evaluate(np.asarray(truth), np.asarray(pred)) if truth else None
         return {"points": rows, "n_compared": len(truth), "metrics": m}
 
+
+
+def replace_file(src: Path, dst: Path, attempts: int = 40) -> None:
+    """os.replace with retries: on Windows the target may briefly be open in another thread/process."""
+    for i in range(attempts):
+        try:
+            src.replace(dst)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(0.05 * (i + 1))
 
 
 def _ring_area(geom: dict) -> float:
@@ -795,7 +817,7 @@ def _write_vrt(path: Path, region: Region, keys: Sequence[str], filename: str, c
                 "    </SimpleSource>"]
         lines.append("  </VRTRasterBand>")
     lines.append("</VRTDataset>")
-    path.write_text("\n".join(lines))
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def region_legend() -> list[dict]:
@@ -809,9 +831,9 @@ def _write_targets(out: Path, targets: list[dict]) -> None:
     import csv
     feats = [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [t["lon"], t["lat"]]},
               "properties": {k: v for k, v in t.items() if k not in ("x", "y")}} for t in targets]
-    (out / "targets.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": feats}))
+    (out / "targets.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": feats}), encoding="utf-8")
     cols = ["id", "lat", "lon", "type_label", "mean_score", "peak_score", "area_ha", "elevation_m", "lithology", "tile"]
-    with open(out / "targets.csv", "w", newline="") as fh:
+    with open(out / "targets.csv", "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(cols)
         for t in targets:

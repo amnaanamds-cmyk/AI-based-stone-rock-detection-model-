@@ -263,7 +263,7 @@ def fit_bundle(collector: SampleCollector, out_dir, algorithms: Sequence[str], m
         meta["algorithms"][algo] = {"label": ALGORITHM_LABELS[algo], "train_seconds": model.train_seconds,
                                     "test_metrics": metrics, **extra}
         progress(b + sp, f"{ALGORITHM_LABELS[algo]}: test accuracy {metrics['overall_accuracy'] * 100:.1f}%")
-    (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+    (out_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return meta
 
 
@@ -311,7 +311,7 @@ class ModelBundle:
 
     def __init__(self, path):
         self.path = Path(path)
-        self.meta = json.loads((self.path / "meta.json").read_text())
+        self.meta = json.loads((self.path / "meta.json").read_text(encoding="utf-8"))
         self.normalizer = Normalizer.from_dict(self.meta["normalizer"])
         self._cache: dict = {}
 
@@ -517,7 +517,7 @@ def classify_scene(model_dir, scene_path, out_dir, algo: Optional[str] = None, d
         save_png(colorize(ref_prev), out_dir / "reference.png")
         result["validation"] = m
     result["seconds"] = round(time.time() - t0, 2)
-    (out_dir / "result.json").write_text(json.dumps(result, indent=2))
+    (out_dir / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     progress(1.0, "Done")
     return result
 

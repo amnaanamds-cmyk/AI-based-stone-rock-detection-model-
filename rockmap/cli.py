@@ -47,7 +47,7 @@ def cmd_align_dem(a):
 
 def cmd_rasterize(a):
     from .reference import rasterize_reference
-    mapping = json.loads(Path(a.mapping).read_text()) if a.mapping else None
+    mapping = json.loads(Path(a.mapping).read_text(encoding="utf-8")) if a.mapping else None
     print(rasterize_reference(a.vector, a.scene, a.out, a.field, mapping))
 
 
@@ -96,7 +96,7 @@ def cmd_evaluate(a):
     m = compare_maps(pred[0].astype("uint8"), ref)
     print(format_report(m, "Map validation"))
     if a.json:
-        Path(a.json).write_text(json.dumps(m, indent=2))
+        Path(a.json).write_text(json.dumps(m, indent=2), encoding="utf-8")
 
 
 def cmd_demo(a):
@@ -162,7 +162,7 @@ def cmd_region_create(a):
     if a.preset:
         geom, name = PRESETS[a.preset]["geometry"], a.name or PRESETS[a.preset]["name"]
     elif a.aoi:
-        geom, name = load_geojson_geometry(json.loads(Path(a.aoi).read_text())), a.name or Path(a.aoi).stem
+        geom, name = load_geojson_geometry(json.loads(Path(a.aoi).read_text(encoding="utf-8"))), a.name or Path(a.aoi).stem
     else:
         sys.exit("give --preset or --aoi")
     cfg = RegionConfig(name=name, aoi=geom, resolution=a.resolution, tile_size=a.tile_size,
@@ -182,7 +182,7 @@ def cmd_region_acquire(a):
 def cmd_region_train(a):
     from .reference import load_reference_features
     r = _region(a)
-    mapping = json.loads(Path(a.mapping).read_text()) if a.mapping else None
+    mapping = json.loads(Path(a.mapping).read_text(encoding="utf-8")) if a.mapping else None
     feats = []
     for v in a.reference or []:
         feats += load_reference_features(v, a.field, mapping)
@@ -201,7 +201,7 @@ def cmd_region_mosaic(a):
 
 def cmd_region_stats(a):
     r = _region(a)
-    districts = json.loads(Path(a.districts).read_text()) if a.districts else None
+    districts = json.loads(Path(a.districts).read_text(encoding="utf-8")) if a.districts else None
     st = r.statistics(districts, a.name_field)
     print(f"{'Class':36s} {'km2':>10s} {'% rock':>7s}")
     for s in st["region"]:
@@ -213,7 +213,7 @@ def cmd_region_stats(a):
             if s["pixels"]:
                 print(f"  {s['name']:34s} {s['area_km2']:10.2f}")
     if a.json:
-        Path(a.json).write_text(json.dumps(st, indent=2))
+        Path(a.json).write_text(json.dumps(st, indent=2), encoding="utf-8")
 
 
 def cmd_region_export(a):
@@ -223,7 +223,7 @@ def cmd_region_export(a):
 def cmd_region_report(a):
     from .report import load_meta, region_report
     r = _region(a)
-    districts = json.loads(Path(a.districts).read_text()) if a.districts else None
+    districts = json.loads(Path(a.districts).read_text(encoding="utf-8")) if a.districts else None
     model = a.model or r.state().get("model")
     print(region_report(r, a.out, load_meta(model) if model else None, r.statistics(districts, a.name_field),
                         a.organisation))
@@ -266,6 +266,22 @@ def cmd_quickstart(a):
     cmd_serve(a)
 
 
+def cmd_doctor(a):
+    from .ops import default_data_dir, doctor
+    sys.exit(1 if doctor(default_data_dir(a.data), a.offline, a.port) else 0)
+
+
+def cmd_backup(a):
+    from .ops import backup, default_data_dir
+    out = a.out or f"rockmap-backup-{__import__('time').strftime('%Y%m%d-%H%M')}.zip"
+    backup(default_data_dir(a.data), Path(out), a.full)
+
+
+def cmd_restore(a):
+    from .ops import default_data_dir, restore
+    restore(Path(a.archive), default_data_dir(a.data), a.force)
+
+
 def cmd_create_user(a):
     import getpass
     from .web.auth import create_user
@@ -273,7 +289,15 @@ def cmd_create_user(a):
     root = Path(a.data) if a.data else Path(os.environ.get("ROCKMAP_DATA_DIR", "data"))
     root.mkdir(parents=True, exist_ok=True)
     pw = a.password or getpass.getpass("Password: ")
-    create_user(Database(root / "rockmap.db"), a.username, pw, a.role)
+    db = Database(root / "rockmap.db")
+    existing = db.one("users", "username = ?", (a.username,))
+    if existing and a.reset:
+        from .web.auth import set_password
+        set_password(db, existing["id"], pw)
+        db.update("users", existing["id"], active=1)
+        print(f"password of '{a.username}' reset (account re-enabled)")
+        return
+    create_user(db, a.username, pw, a.role)
     print(f"user '{a.username}' ({a.role}) created")
 
 
@@ -391,9 +415,28 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("create-user", help="create a dashboard user")
     s.add_argument("username")
     s.add_argument("--role", choices=["admin", "analyst", "viewer"], default="analyst")
+    s.add_argument("--reset", action="store_true", help="reset the password of an existing user")
     s.add_argument("--password", help="omit to be prompted")
     s.add_argument("--data")
     s.set_defaults(func=cmd_create_user)
+
+    s = sub.add_parser("doctor", help="check the installation, data folder, disk space and internet access")
+    s.add_argument("--data")
+    s.add_argument("--offline", action="store_true", help="skip the internet checks")
+    s.add_argument("--port", type=int, default=5000)
+    s.set_defaults(func=cmd_doctor)
+
+    s = sub.add_parser("backup", help="back up the database and data folder to a .zip")
+    s.add_argument("--data")
+    s.add_argument("--out", help="zip file (default rockmap-backup-DATE.zip)")
+    s.add_argument("--full", action="store_true", help="also include imagery tiles (large)")
+    s.set_defaults(func=cmd_backup)
+
+    s = sub.add_parser("restore", help="restore a backup .zip into a data folder")
+    s.add_argument("archive")
+    s.add_argument("--data")
+    s.add_argument("--force", action="store_true", help="overwrite an existing database")
+    s.set_defaults(func=cmd_restore)
 
     s = sub.add_parser("presets", help="list ready-made Gilgit-Baltistan study areas")
     s.set_defaults(func=cmd_presets)
@@ -468,6 +511,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):   # Windows consoles default to cp1252
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     args = build_parser().parse_args(argv)
     args.func(args)
 

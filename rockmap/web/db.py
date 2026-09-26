@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
     role          TEXT NOT NULL DEFAULT 'analyst',
     active        INTEGER NOT NULL DEFAULT 1,
     api_token_hash TEXT,
+    must_change   INTEGER NOT NULL DEFAULT 0,
     last_login    TEXT,
     created       TEXT NOT NULL
 );
@@ -123,6 +124,7 @@ CREATE INDEX IF NOT EXISTS obs_region ON observations(region_id);
 MIGRATIONS = {
     "scenes": {"created_by": "TEXT"},
     "regions": {"share_token": "TEXT"},
+    "users": {"must_change": "INTEGER NOT NULL DEFAULT 0"},
     "models": {"region_id": "INTEGER", "created_by": "TEXT"},
     "jobs": {"region_id": "INTEGER", "user": "TEXT", "worker": "TEXT", "cancel": "INTEGER NOT NULL DEFAULT 0",
              "attempts": "INTEGER NOT NULL DEFAULT 0", "heartbeat": "REAL", "started": "TEXT"},

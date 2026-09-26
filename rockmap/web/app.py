@@ -66,7 +66,7 @@ def register_scene(db: Database, root: Path, folder: Path, name: str, source: st
     except Exception:  # noqa: BLE001 - odd CRSs just disable the web map
         bounds = None
     return db.insert("scenes", name=name, source=source, sensor=sensor, dos=int(dos),
-                     folder=str(folder.relative_to(root)), has_dem=int((folder / "dem.tif").exists()),
+                     folder=folder.relative_to(root).as_posix(), has_dem=int((folder / "dem.tif").exists()),
                      has_reference=int((folder / "reference.tif").exists()),
                      has_cloud=int((folder / "cloud.tif").exists()), width=info.width, height=info.height,
                      crs=info.crs.to_string() if info.crs else None, bounds=bounds,
@@ -107,10 +107,10 @@ def job_train(ctx):
                         sensor=scene["sensor"], dos=bool(scene["dos"]), samples_per_class=p["samples"],
                         epochs=p["epochs"], name=p["name"], progress=ctx.progress)
     summary, best = model_summary(meta)
-    model_id = db.insert("models", name=p["name"], folder=str(folder.relative_to(root)), scene_id=scene["id"],
+    model_id = db.insert("models", name=p["name"], folder=folder.relative_to(root).as_posix(), scene_id=scene["id"],
                          uses_dem=int(meta["uses_dem"]), best_algo=best, summary=summary,
                          created_by=ctx.job["user"])
-    db.update("jobs", ctx.job["id"], model_id=model_id, folder=str(folder.relative_to(root)))
+    db.update("jobs", ctx.job["id"], model_id=model_id, folder=folder.relative_to(root).as_posix())
 
 
 @handler("classify")
@@ -120,7 +120,7 @@ def job_classify(ctx):
     scene = db.get("scenes", ctx.job["scene_id"])
     model = db.get("models", ctx.job["model_id"])
     folder = root / "jobs" / str(ctx.job["id"])
-    db.update("jobs", ctx.job["id"], folder=str(folder.relative_to(root)))
+    db.update("jobs", ctx.job["id"], folder=folder.relative_to(root).as_posix())
     classify_scene(root / model["folder"], _scene_file(root, scene, "scene"), folder, p["algorithm"],
                    dem_path=_scene_file(root, scene, "dem") if model["uses_dem"] else None,
                    cloud_path=_scene_file(root, scene, "cloud"),
@@ -135,19 +135,21 @@ def _secret_key(root: Path) -> str:
         return os.environ["ROCKMAP_SECRET_KEY"]
     p = root / "secret_key"
     if not p.exists():
-        p.write_text(secrets.token_hex(32))
+        p.write_text(secrets.token_hex(32), encoding="utf-8")
         p.chmod(0o600)
-    return p.read_text().strip()
+    return p.read_text(encoding="utf-8").strip()
 
 
 def _bootstrap_admin(db: Database, root: Path) -> None:
     if db.count("users"):
         return
     pw = os.environ.get("ROCKMAP_ADMIN_PASSWORD") or secrets.token_urlsafe(12)
-    auth.create_user(db, os.environ.get("ROCKMAP_ADMIN_USER", "admin"), pw, "admin")
+    # generated or demo passwords are temporary: the admin must replace them at first sign-in
+    temporary = not os.environ.get("ROCKMAP_ADMIN_PASSWORD") or pw in auth.WEAK_PASSWORDS
+    auth.create_user(db, os.environ.get("ROCKMAP_ADMIN_USER", "admin"), pw, "admin", must_change=temporary)
     if not os.environ.get("ROCKMAP_ADMIN_PASSWORD"):
         p = root / "initial_admin_password.txt"
-        p.write_text(f"username: admin\npassword: {pw}\n(change it after the first login, then delete this file)\n")
+        p.write_text(f"username: admin\npassword: {pw}\n(change it after the first login, then delete this file)\n", encoding="utf-8")
         p.chmod(0o600)
         print(f"\n*** First start: created user 'admin' with password '{pw}' (also saved in {p}) ***\n", flush=True)
 
@@ -199,6 +201,7 @@ def create_app(root: Optional[Path] = None, sync_jobs: bool = False, workers: Op
     def before():
         auth.load_user()
         auth.check_csrf()
+        return auth.require_password_change()
 
     @app.after_request
     def headers(resp):
@@ -294,7 +297,8 @@ def create_app(root: Optional[Path] = None, sync_jobs: bool = False, workers: Op
             action = request.form.get("action")
             try:
                 if action == "create":
-                    auth.create_user(db, request.form["username"], request.form["password"], request.form["role"])
+                    auth.create_user(db, request.form["username"], request.form["password"], request.form["role"],
+                                     must_change=True)
                     audit("user.create", request.form["username"])
                     flash("User created.", "ok")
                 else:
@@ -311,7 +315,7 @@ def create_app(root: Optional[Path] = None, sync_jobs: bool = False, workers: Op
                     elif action == "activate":
                         db.update("users", uid, active=1)
                     elif action == "reset":
-                        auth.set_password(db, uid, request.form["password"])
+                        auth.set_password(db, uid, request.form["password"], must_change=True)
                     audit(f"user.{action}", target["username"])
                     flash("User updated.", "ok")
             except (ValueError, KeyError) as e:
@@ -472,9 +476,9 @@ def create_app(root: Optional[Path] = None, sync_jobs: bool = False, workers: Op
         if job["status"] == "done" and job["folder"]:
             folder = root / job["folder"]
             if job["kind"] == "classify" and (folder / "result.json").exists():
-                result = json.loads((folder / "result.json").read_text())
+                result = json.loads((folder / "result.json").read_text(encoding="utf-8"))
             if job["kind"] == "train" and (folder / "meta.json").exists():
-                meta = json.loads((folder / "meta.json").read_text())
+                meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
         layers = []
         if result:
             base = url_for("files", relpath=job["folder"])
@@ -508,7 +512,7 @@ def create_app(root: Optional[Path] = None, sync_jobs: bool = False, workers: Op
     @requires("viewer")
     def model_page(model_id):
         model = db.get("models", model_id) or abort(404)
-        meta = json.loads((root / model["folder"] / "meta.json").read_text())
+        meta = json.loads((root / model["folder"] / "meta.json").read_text(encoding="utf-8"))
         return render_template("model.html", model=model, meta=meta)
 
     @app.post("/models/<int:model_id>/delete")
