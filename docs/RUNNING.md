@@ -18,7 +18,9 @@ run.bat
 
 The first run creates a virtual environment in `.venv`, installs everything (about 5 minutes) and builds a complete demo (about 1–2 minutes). It then opens the dashboard at **http://127.0.0.1:5000**.
 
-Sign in with **admin / rockmap-demo**, then change the password under *Profile*.
+Sign in with **admin / rockmap-demo**. You will be asked to choose your own password straight away.
+
+To check that everything is installed correctly at any time, run `rockmap doctor` (Windows: `.venv\Scripts\rockmap doctor`). Every line should say `OK`.
 
 | Command | What it does |
 |---|---|
@@ -37,7 +39,9 @@ pip install -e ".[dev]"
 rockmap quickstart            # build the demo and open the dashboard
 # later:
 rockmap serve --open          # start the dashboard
-pytest                        # run the 57 automated tests
+pytest                        # run the automated tests
+rockmap doctor                # installation self-check
+rockmap backup                # back up all data to a zip
 ```
 
 ## Method 3: Docker (servers)
@@ -86,6 +90,7 @@ rockmap region query regions/hunza --lon 74.66 --lat 36.32
 | `python` not found (Windows) | Reinstall Python with "Add to PATH" ticked, or use `py -3` |
 | Torch installation fails | `pip install torch` without the index URL; on Windows use 64-bit Python 3.10–3.12 |
 | Port 5000 already used (macOS AirPlay) | `rockmap serve --port 8080 --open` |
-| Forgot the admin password | `rockmap create-user admin2 --role admin` |
+| Forgot the admin password | `rockmap create-user admin --reset` |
+| Something else is wrong | Run `rockmap doctor`; it names the problem and the fix |
 | Downloads fail behind a proxy | Set `HTTPS_PROXY`; if TLS is intercepted, set `CURL_CA_BUNDLE` and `SSL_CERT_FILE` to the proxy CA file |
 | Basemap is grey | OpenStreetMap / Esri tiles need internet. The RockMap imagery layers work offline |

@@ -9,7 +9,8 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from contextlib import contextmanager
+from typing import Any, Iterator, Optional
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -153,10 +154,16 @@ class Database:
                             c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
             c.executescript(SCHEMA)
 
-    def _conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _conn(self) -> Iterator[sqlite3.Connection]:
+        """Connection that commits (or rolls back) and is always closed - Windows keeps open files locked."""
         conn = sqlite3.connect(self.path, timeout=30)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     @staticmethod
     def _decode(row: Optional[sqlite3.Row]) -> Optional[dict]:

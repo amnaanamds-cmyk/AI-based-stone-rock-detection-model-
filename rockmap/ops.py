@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import zipfile
+from contextlib import closing
 from pathlib import Path
 
 OK, WARN, FAIL = "OK  ", "WARN", "FAIL"
@@ -31,7 +32,11 @@ def doctor(data: Path, offline: bool = False, port: int = 5000) -> int:
                      ("PIL", "images"), ("matplotlib", "reports")):
         try:
             m = __import__(mod)
-            ver = getattr(m, "__version__", "")
+            try:
+                from importlib.metadata import version
+                ver = version({"sklearn": "scikit-learn", "PIL": "pillow"}.get(mod, mod))
+            except Exception:  # noqa: BLE001
+                ver = ""
             extra = ""
             if mod == "rasterio":
                 extra = f", GDAL {m.__gdal_version__}"
@@ -54,7 +59,7 @@ def doctor(data: Path, offline: bool = False, port: int = 5000) -> int:
     db = data / "rockmap.db"
     if db.exists():
         try:
-            with sqlite3.connect(db) as c:
+            with closing(sqlite3.connect(db)) as c:
                 users = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
                 regions = c.execute("SELECT COUNT(*) FROM regions").fetchone()[0]
                 stuck = c.execute("SELECT COUNT(*) FROM jobs WHERE status='running' AND heartbeat < ?",
@@ -108,7 +113,8 @@ def backup(data: Path, out: Path, full: bool = False) -> Path:
         raise FileNotFoundError(f"no RockMap database in {data}")
     with tempfile.TemporaryDirectory() as tmp:
         snap = Path(tmp) / "rockmap.db"
-        with sqlite3.connect(data / "rockmap.db") as src, sqlite3.connect(snap) as dst:
+        # closing() matters: "with sqlite3.connect()" only commits, and Windows cannot delete an open file
+        with closing(sqlite3.connect(data / "rockmap.db")) as src, closing(sqlite3.connect(snap)) as dst:
             src.backup(dst)
         out.parent.mkdir(parents=True, exist_ok=True)
         n = 0
