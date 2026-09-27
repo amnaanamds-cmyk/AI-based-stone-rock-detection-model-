@@ -79,7 +79,7 @@ def _pick_level(path: Path, tile_px_m: float) -> int:
 
 def render_tile(mosaic: Path, layer: str, z: int, x: int, y: int) -> bytes:
     """PNG bytes of one XYZ tile of a region mosaic (transparent outside data)."""
-    categorical = layer in ("lithology", "surface", "hazard", "clusters", "alteration")
+    categorical = layer in ("lithology", "surface", "hazard", "clusters", "alteration") or layer.startswith("gem")
     rs = Resampling.nearest if categorical else Resampling.bilinear
     left, bottom, right, top = tile_bounds(z, x, y)
     full, _ = _open(mosaic, -1)
@@ -94,7 +94,9 @@ def render_tile(mosaic: Path, layer: str, z: int, x: int, y: int) -> bytes:
         with WarpedVRT(src, crs="EPSG:3857", transform=dst_transform, width=TILE, height=TILE,
                        resampling=rs, src_nodata=0, nodata=0) as vrt:
             data = vrt.read()
-    if layer in ("alteration", "hazard", "clusters"):
+    if layer.startswith("gem"):
+        rgba = _gem_rgba(layer, data[0])
+    elif layer in ("alteration", "hazard", "clusters"):
         rgba = _analytics_rgba(layer, data[0])
     elif categorical:
         rgba = colorize(data[0])
@@ -142,6 +144,22 @@ def _analytics_rgba(layer: str, v: np.ndarray) -> np.ndarray:
     rgba[..., 1] = (230 * (1 - t) + 20 * t).astype(np.uint8)
     rgba[..., 2] = (60 * (1 - t)).astype(np.uint8)
     rgba[..., 3] = np.where(score >= 40, 120 + 135 * t, 0).astype(np.uint8)
+    return rgba
+
+
+def _gem_rgba(layer: str, v: np.ndarray) -> np.ndarray:
+    """Gem prospectivity: transparent below 50, then the model colour growing more opaque to 100."""
+    from .gems import MODEL_BY_KEY
+    key = layer[4:] if layer.startswith("gem_") else ""
+    color = MODEL_BY_KEY[key].color if key in MODEL_BY_KEY else ("#e6550d" if key == "ml" else "#c51b8a")
+    c = color.lstrip("#")
+    rgb = [int(c[i:i + 2], 16) for i in (0, 2, 4)]
+    score = v.astype(np.float32) - 1
+    t = np.clip((score - 50) / 50, 0, 1)
+    rgba = np.zeros((*v.shape, 4), np.uint8)
+    for i in range(3):
+        rgba[..., i] = (255 * (1 - t) * 0.35 + rgb[i] * (0.65 + 0.35 * t)).clip(0, 255).astype(np.uint8)
+    rgba[..., 3] = np.where(score >= 50, 70 + 185 * t, 0).astype(np.uint8)
     return rgba
 
 

@@ -42,7 +42,9 @@
     overlays["Surface cover (snow, water, vegetation, shadow)"] = L.tileLayer(tileUrl("surface"), { maxZoom: 17, maxNativeZoom: 16, opacity: 0.85 });
     if (!lith) overlays["Surface cover (snow, water, vegetation, shadow)"].addTo(map);
   }
-  var extra = { alteration: "Mineral alteration score", hazard: "Landslide / rockfall susceptibility", clusters: "Spectral units" };
+  var extra = { alteration: "Mineral alteration score", hazard: "Landslide / rockfall susceptibility", clusters: "Spectral units",
+    gems: "Gem prospectivity (best setting)", gem_marble: "Gem - ruby & spinel (marble)", gem_pegmatite: "Gem - aquamarine / topaz / tourmaline (pegmatite)",
+    gem_contact: "Gem - emerald & beryl (contacts)", gem_ultramafic: "Gem - peridot & nephrite (ultramafic)", gem_ml: "Gem - data-driven (known localities)" };
   Object.keys(extra).forEach(function (l) {
     if (available.indexOf(l) >= 0) overlays[extra[l]] = L.tileLayer(tileUrl(l), { maxZoom: 17, maxNativeZoom: 16, opacity: l === "clusters" ? 0.75 : 0.85 });
   });
@@ -105,6 +107,42 @@
   if (el.dataset.obsApi) {
     fetch(el.dataset.obsApi).then(function (r) { return r.json(); }).then(function (d) { obsLayer.addData(d); if (d.features.length) obsLayer.addTo(map); });
     overlays["Field observations"] = obsLayer;
+  }
+  var gemKeys = el.dataset.gemModels ? JSON.parse(el.dataset.gemModels) : [];
+  var gemColors = el.dataset.gemColors ? JSON.parse(el.dataset.gemColors) : [];
+  var gemColor = function (k) { var i = gemKeys.indexOf(k); return i >= 0 ? gemColors[i] : "#c51b8a"; };
+  var gemTargets = L.geoJSON(null, {
+    pointToLayer: function (f, ll) {
+      var p = f.properties;
+      return L.marker(ll, { icon: L.divIcon({ className: "", iconSize: [18, 18], html:
+        "<div class='gem-marker' style='background:" + esc(gemColor(p.model)) + "'>&#9670;</div>" }) });
+    },
+    onEachFeature: function (f, layer) {
+      var p = f.properties;
+      layer.bindPopup("<b>Gem target #" + (+p.id) + "</b><br>" + esc(p.model_name) + "<br><i>" + esc(p.gems) + "</i>" +
+        "<br>Score " + (+p.mean_score).toFixed(0) + " · " + (+p.area_ha).toFixed(1) + " ha" +
+        (p.elevation_m ? " · " + Math.round(p.elevation_m) + " m" : "") +
+        "<br><span class='muted'>" + (+p.lat).toFixed(5) + "°N, " + (+p.lon).toFixed(5) + "°E</span>" +
+        "<br><span class='muted'>Screening target - verify in the field.</span>");
+    }
+  });
+  if (el.dataset.gemTargetsApi) {
+    fetch(el.dataset.gemTargetsApi).then(function (r) { return r.json(); }).then(function (d) { gemTargets.addData(d); if (d.features && d.features.length) gemTargets.addTo(map); });
+    overlays["Gem target zones"] = gemTargets;
+  }
+  var gemOcc = L.geoJSON(null, {
+    pointToLayer: function (f, ll) {
+      return L.marker(ll, { icon: L.divIcon({ className: "", iconSize: [20, 20], html: "<div class='gem-known'>&#9733;</div>" }) });
+    },
+    onEachFeature: function (f, layer) {
+      var p = f.properties;
+      layer.bindPopup("<b>Known gem locality</b><br>" + esc(p.gem || "?") + (p.name ? "<br>" + esc(p.name) : "") +
+        "<br><span class='muted'>source: " + esc(p.source) + "</span>");
+    }
+  });
+  if (el.dataset.gemOccApi) {
+    fetch(el.dataset.gemOccApi).then(function (r) { return r.json(); }).then(function (d) { gemOcc.addData(d); if (d.features.length) gemOcc.addTo(map); });
+    overlays["Known gem localities"] = gemOcc;
   }
   document.querySelectorAll(".zoom-to").forEach(function (a) {
     a.addEventListener("click", function (e) {

@@ -21,6 +21,9 @@
   <input type="hidden" id="accuracy_m" name="accuracy_m">
   <label for="class_id">Rock type observed</label>
   <select id="class_id" name="class_id" required>{% for c in classes %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select>
+  <label for="gem">Gem / mineral found here (optional)</label>
+  <select id="gem" name="gem"><option value="">— none —</option>{% for g in gem_names %}<option value="{{ g }}">{{ g|capitalize }}</option>{% endfor %}</select>
+  <p class="hint">Gem finds become known localities that validate and train the gem prospectivity maps.</p>
   <label>Certainty</label>
   <div class="row"><label class="check"><input type="radio" name="certainty" value="1"> unsure</label>
   <label class="check"><input type="radio" name="certainty" value="2" checked> probable</label>
@@ -36,7 +39,7 @@
 {% endif %}
 <div class="card" style="margin-top: 12px">
   <h2>My recent observations</h2>
-  {% for o in recent %}<p style="margin: 4px 0"><span class="swatch" style="background: {{ class_by_id[o.class_id].color }}"></span>{{ class_by_id[o.class_id].name }} <span class="muted mono">{{ '%.5f' % o.lat }}, {{ '%.5f' % o.lon }} · {{ o.created[5:16] }}{{ ' · 📷' if o.photo }}</span></p>
+  {% for o in recent %}<p style="margin: 4px 0"><span class="swatch" style="background: {{ class_by_id[o.class_id].color }}"></span>{{ class_by_id[o.class_id].name }}{% if o.gem %} · 💎 {{ o.gem }}{% endif %} <span class="muted mono">{{ '%.5f' % o.lat }}, {{ '%.5f' % o.lon }} · {{ o.created[5:16] }}{{ ' · 📷' if o.photo }}</span></p>
   {% else %}<p class="empty">None yet.</p>{% endfor %}
 </div>
 {% endblock %}

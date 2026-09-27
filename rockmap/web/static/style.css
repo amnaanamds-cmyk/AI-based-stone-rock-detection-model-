@@ -145,3 +145,7 @@ pre.log { background: var(--bg); border: 1px solid var(--line); border-radius: 6
   main { padding: 16px 12px 48px; }
   h1 { font-size: 21px; }
 }
+.gem-marker { width: 18px; height: 18px; line-height: 16px; text-align: center; color: #fff; font-size: 13px; border-radius: 50%;
+  border: 1.5px solid #fff; box-shadow: 0 0 0 1px #000; }
+.gem-known { width: 20px; height: 20px; line-height: 20px; text-align: center; color: #ffd400; font-size: 20px; text-shadow: 0 0 2px #000, 0 0 2px #000; }
+.gem-card { border-color: #c51b8a55; }

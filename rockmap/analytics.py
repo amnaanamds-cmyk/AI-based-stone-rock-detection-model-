@@ -208,7 +208,7 @@ def predict_clusters(feats: np.ndarray, usable: np.ndarray, mean, std, km) -> tu
 
 
 # ----------------------------------------------------------------------------- insights
-def insights(stats: Optional[dict], analytics: Optional[dict]) -> list[str]:
+def insights(stats: Optional[dict], analytics: Optional[dict], gems: Optional[dict] = None) -> list[str]:
     """Plain-language findings for the dashboard and the executive summary of the report."""
     out: list[str] = []
     if stats and stats.get("classified_km2"):
@@ -243,4 +243,14 @@ def insights(stats: Optional[dict], analytics: Optional[dict]) -> list[str]:
         if analytics.get("clusters"):
             out.append(f"{len(analytics['clusters'])} spectral units were identified without training data; "
                        f"{sum(1 for c in analytics['clusters'] if c.get('class_id'))} have been named by a geologist.")
+    if gems and gems.get("targets_total"):
+        best = max(gems["models"], key=lambda m: m["targets"])
+        top = gems["targets_top"][0]
+        out.append(f"{gems['targets_total']} gemstone target zones were ranked; the most numerous setting is "
+                   f"{best['name'].lower()} ({best['targets']} zones). Top zone: {top['model_name']} "
+                   f"({top['gems']}) at {top['lat']:.4f}°N, {top['lon']:.4f}°E.")
+        v = (gems.get("validation") or {}).get("overall") or {}
+        if v.get("n"):
+            out.append(f"{v['n']} known gem localities check the map: {v['top20'] * 100:.0f}% lie in the 20% most "
+                       f"prospective ground (AUC {v['auc']:.2f}; 0.5 = random).")
     return out

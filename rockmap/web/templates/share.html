@@ -20,6 +20,9 @@
       <div id="region-map" data-tiles-api="{{ url_for('regions.share_tiles_api', token=token) }}"
            data-query-api="{{ url_for('regions.share_query', token=token) }}"
            data-targets-api="{{ url_for('regions.share_targets', token=token) }}"
+           data-gem-targets-api="{{ url_for('regions.share_gem_targets', token=token) }}"
+           data-gem-models="{{ gem_models|map(attribute='key')|list|tojson|forceescape }}"
+           data-gem-colors="{{ gem_models|map(attribute='color')|list|tojson|forceescape }}"
            data-tile-url="{{ url_for('regions.share_tile', token=token, layer='LAYER', z=0, x=0, y=0)|replace('/0/0/0.png', '/{z}/{x}/{y}.png') }}?v={{ version }}"
            data-layers="{{ layers|tojson|forceescape }}" data-can-edit="0" data-classes="{{ classes|tojson|forceescape }}"></div>
       <div class="map-tools row"><label class="check" style="margin: 0">Lithology opacity <input type="range" min="0" max="100" value="80" id="lith-opacity"></label></div>
@@ -32,6 +35,12 @@
         <tr><th>Class</th><th class="num">km²</th><th class="num">% rock</th></tr>
         {% for s in stats.region if s.pixels %}<tr><td><span class="swatch" style="background: {{ s.color }}"></span>{{ s.name }}</td><td class="num">{{ '{:,.1f}'.format(s.area_km2) }}</td><td class="num">{{ '%.1f' % s.percent if s.percent is not none else '–' }}</td></tr>{% endfor %}
       </table></div>
+      {% endif %}
+      {% if gems and gems.targets_top %}
+      <div class="card gem-card"><h2>💎 Gemstone target zones</h2><table>
+        <tr><th>#</th><th>Setting</th><th class="num">Score</th><th class="num">ha</th><th></th></tr>
+        {% for t in gems.targets_top[:10] %}<tr><td>{{ t.id }}</td><td><span class="swatch" style="background: {{ (gem_models|selectattr('key', 'equalto', t.model)|first).color }}"></span>{{ t.model_name }}<br><span class="muted" style="font-size: 12px">{{ t.gems }}</span></td><td class="num">{{ '%.0f' % t.mean_score }}</td><td class="num">{{ '%.1f' % t.area_ha }}</td><td><a href="#" class="zoom-to" data-lat="{{ t.lat }}" data-lon="{{ t.lon }}">zoom</a></td></tr>{% endfor %}
+      </table><p class="hint">Ranked host-rock settings for field checks — not proven deposits.</p></div>
       {% endif %}
       {% if analytics and analytics.targets_top %}
       <div class="card"><h2>Top alteration targets</h2><table>

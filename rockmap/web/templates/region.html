@@ -22,6 +22,10 @@
          data-query-api="{{ url_for('regions.api_region_query', region_id=row.id) }}"
          data-ann-api="{{ url_for('regions.api_annotations', region_id=row.id) }}"
          data-targets-api="{{ url_for('regions.api_region_targets', region_id=row.id) }}"
+         data-gem-targets-api="{{ url_for('regions.api_region_gem_targets', region_id=row.id) }}"
+         data-gem-occ-api="{{ url_for('regions.api_region_gem_occurrences', region_id=row.id) }}"
+         data-gem-models="{{ gem_models|map(attribute='key')|list|tojson|forceescape }}"
+         data-gem-colors="{{ gem_models|map(attribute='color')|list|tojson|forceescape }}"
          data-obs-api="{{ url_for('field.api_observations', region_id=row.id) }}"
          data-tile-url="{{ url_for('regions.tile', region_id=row.id, layer='LAYER', z=0, x=0, y=0)|replace('/0/0/0.png', '/{z}/{x}/{y}.png') }}?v={{ version }}"
          data-layers="{{ layers|tojson|forceescape }}"
@@ -87,6 +91,14 @@
           <p class="hint">Finds mineral-alteration targets, maps landslide / rockfall susceptibility and groups the terrain into spectral units that you can name (step 3b) to get a rock map immediately.</p>
           <label>Number of spectral units</label><input type="number" name="n_clusters" value="10" min="2" max="16">
           <button class="btn small" style="margin-top: 8px" {{ 'disabled' if not summary.acquired }}>Run analytics</button>
+        </form>
+      </details>
+      <details {{ 'open' if summary.acquired and analytics and not gems }}>
+        <summary><b>1c · Gemstone prospectivity</b> {% if gems %}<span class="muted">(done {{ gems.created[5:16] }})</span>{% endif %}</summary>
+        <form method="post" action="{{ url_for('regions.region_run', region_id=row.id) }}">{{ csrf_field() }}
+          <input type="hidden" name="stage" value="gems">
+          <p class="hint">Ranks ground for ruby / spinel (marble), aquamarine / topaz / tourmaline / garnet (pegmatite), emerald / beryl (contacts) and peridot / nephrite (ultramafic). {{ gem_occ|length }} known localities will validate the maps{{ ' and train a data-driven model' if gem_occ|length >= 8 }}.</p>
+          <button class="btn small" {{ 'disabled' if not summary.acquired }}>Run gem prospectivity</button>
         </form>
       </details>
       <details>
@@ -155,6 +167,53 @@
       </details>
     </div>
     {% endif %}
+
+    <div class="card gem-card">
+      <h2>💎 Gemstone prospectivity</h2>
+      {% if products['gem_targets.csv'] %}<div class="row" style="margin-bottom: 6px"><span class="muted" style="font-size: 13px">Target zones:</span>
+        <a class="btn small ghost" href="{{ url_for('regions.region_gem_targets_file', region_id=row.id, fmt='csv') }}">CSV</a>
+        <a class="btn small ghost" href="{{ url_for('regions.region_gem_targets_file', region_id=row.id, fmt='geojson') }}">GeoJSON</a></div>{% endif %}
+      {% if gems %}
+      <p class="hint">Satellites cannot see gem crystals; these layers rank the <b>host rocks and settings</b> where gems form. Target zones = top 1 % of the region for each setting. Screening for field work — not proven deposits.</p>
+      <div class="table-wrap"><table>
+        <tr><th>Setting</th><th>Gems</th><th class="num">Zones</th><th class="num">Validation</th></tr>
+        {% for m in gems.models %}
+        <tr><td><span class="swatch" style="background: {{ m.color }}"></span>{{ m.name }}</td><td class="muted" style="font-size: 12.5px">{{ m.gems }}</td>
+          <td class="num">{{ m.targets }}</td>
+          <td class="num">{% if m.validation.n %}<span title="AUC {{ m.validation.auc }}, {{ m.validation.n }} localities">{{ '%.0f' % (m.validation.top20 * 100) }}% in top 20%</span>{% else %}<span class="muted">–</span>{% endif %}</td></tr>
+        {% endfor %}
+      </table></div>
+      {% set v = gems.validation.overall %}
+      {% if v.n %}<p><b>Known localities:</b> {{ v.n }} inside the region · AUC {{ '%.2f' % v.auc }} (0.5 = random, 1 = perfect) · {{ '%.0f' % (v.top10 * 100) }}% fall in the top 10% of ground.</p>{% endif %}
+      {% if gems.ml %}<p><b>Data-driven model:</b> trained on {{ gems.ml.occurrences }} localities{% if gems.ml.cv_auc %}, cross-validated AUC {{ '%.2f' % gems.ml.cv_auc }}{% endif %} (map layer "Gem - data-driven").</p>{% endif %}
+      {% if gems.targets_top %}
+      <h3>Top target zones</h3>
+      <div class="table-wrap"><table>
+        <tr><th>#</th><th>Setting</th><th class="num">Score</th><th class="num">ha</th><th class="num">Elev.</th><th></th></tr>
+        {% for t in gems.targets_top[:12] %}
+        <tr><td>{{ t.id }}</td><td><span class="swatch" style="background: {{ (gem_models|selectattr('key', 'equalto', t.model)|first).color }}"></span>{{ t.model_name.split(' ')[0] }} <span class="muted" style="font-size: 12px">{{ t.gems.split(',')[0] }}…</span></td>
+          <td class="num">{{ '%.0f' % t.mean_score }}</td><td class="num">{{ '%.1f' % t.area_ha }}</td>
+          <td class="num">{{ '%.0f' % t.elevation_m if t.elevation_m else '–' }}</td>
+          <td><a href="#" class="zoom-to" data-lat="{{ t.lat }}" data-lon="{{ t.lon }}">zoom</a></td></tr>
+        {% endfor %}
+      </table></div>
+      {% endif %}
+      {% else %}
+      <p class="empty">Run step 1c "Gemstone prospectivity" (after acquiring imagery).</p>
+      {% endif %}
+      {% if has_role('analyst') %}
+      <details><summary>Known gem localities ({{ gem_occ|length }})</summary>
+        <p class="hint">Upload localities from the Geological Survey of Pakistan, Mindat, publications or your own survey: CSV with columns <span class="mono">lat, lon, gem, name</span>, or GeoJSON points with a <span class="mono">gem</span> property. Gem names: {{ gem_names|join(', ') }}. Field-app finds with a gem are added automatically.</p>
+        <form method="post" enctype="multipart/form-data" action="{{ url_for('regions.region_gem_occurrences', region_id=row.id) }}">{{ csrf_field() }}
+          <input type="file" name="file" accept=".csv,.geojson,.json" required>
+          <label class="check"><input type="radio" name="mode" value="replace" checked> replace uploaded list</label>
+          <label class="check"><input type="radio" name="mode" value="append"> add to it</label>
+          <button class="btn small ghost">Upload localities</button>
+        </form>
+        {% if gem_occ %}<form method="post" action="{{ url_for('regions.region_gem_occurrences', region_id=row.id) }}" style="margin-top: 6px">{{ csrf_field() }}<input type="hidden" name="action" value="clear"><button class="btn small danger">Remove uploaded localities</button></form>{% endif %}
+      </details>
+      {% endif %}
+    </div>
 
     {% if analytics %}
     <div class="card">
@@ -266,6 +325,10 @@
         {% for c in rock_classes %}<li><span class="swatch" style="background: {{ c.color }}"></span>{{ c.name }}</li>{% endfor %}
         {% for c in mask_classes if c.id != 255 %}<li><span class="swatch" style="background: {{ c.color }}"></span>{{ c.name }}</li>{% endfor %}
       </ul>
+      {% if gems %}
+      <h3>Gem settings</h3>
+      <ul class="legend">{% for m in gem_models %}<li><span class="swatch" style="background: {{ m.color }}"></span>{{ m.name }} <span class="muted">({{ m.gems }})</span></li>{% endfor %}</ul>
+      {% endif %}
       {% if analytics %}
       <h3>Alteration score</h3>
       <div class="gradient-bar"></div><div class="row muted" style="font-size: 12px"><span>40 (weak)</span><span class="spacer"></span><span>100 (strong anomaly)</span></div>

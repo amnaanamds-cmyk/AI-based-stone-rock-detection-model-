@@ -37,7 +37,7 @@ def _table(ax, rows, header, col_widths=None, fontsize=8.5):
 
 def region_report(region, out_path, model_meta: Optional[dict] = None, stats: Optional[dict] = None,
                   organisation: str = "", analytics: Optional[dict] = None,
-                  validation: Optional[dict] = None) -> Path:
+                  validation: Optional[dict] = None, gems: Optional[dict] = None) -> Path:
     """Multi-page PDF: map, area statistics, district table, model accuracy, data & method."""
     import rasterio
     from matplotlib.backends.backend_pdf import PdfPages
@@ -99,7 +99,7 @@ def region_report(region, out_path, model_meta: Optional[dict] = None, stats: Op
 
         # --- page 2: executive summary ----------------------------------------------
         from .analytics import insights
-        found = insights(stats, analytics)
+        found = insights(stats, analytics, gems)
         if found:
             fig = plt.figure(figsize=(8.27, 11.69))
             fig.suptitle("Executive summary", fontsize=15, weight="bold", x=0.06, ha="left", y=0.97)
@@ -208,6 +208,42 @@ def region_report(region, out_path, model_meta: Optional[dict] = None, stats: Op
                 ax.set_xlabel("km2")
                 ax.set_title("Landslide / rockfall susceptibility (indicative)", fontsize=10)
                 ax.spines[["top", "right"]].set_visible(False)
+            pdf.savefig(fig)
+            plt.close(fig)
+
+        # --- page 4c: gemstones -------------------------------------------------------
+        if gems:
+            fig = plt.figure(figsize=(8.27, 11.69))
+            fig.suptitle("Gemstone prospectivity", fontsize=15, weight="bold", x=0.06, ha="left", y=0.97)
+            ax = fig.add_axes([0.06, 0.78, 0.88, 0.15])
+            rows = []
+            for m in gems["models"]:
+                v = m.get("validation") or {}
+                rows.append([m["name"], m["gems"], str(m["targets"]),
+                             f"AUC {v['auc']:.2f}, {v['top20'] * 100:.0f}% in top 20%" if v.get("n") else "-"])
+            _table(ax, rows, ["Setting", "Gems", "Zones", "Validation (known localities)"],
+                   [0.27, 0.36, 0.08, 0.29], fontsize=7.5)
+            tg = gems.get("targets_top", [])[:18]
+            ax = fig.add_axes([0.06, 0.3, 0.88, 0.44])
+            if tg:
+                rows = [[t["id"], t["model_name"].split(" ")[0], f"{t['lat']:.5f}", f"{t['lon']:.5f}",
+                         f"{t['mean_score']:.0f}", f"{t['area_ha']:.1f}",
+                         f"{t['elevation_m']:.0f}" if t.get("elevation_m") else "-"] for t in tg]
+                _table(ax, rows, ["#", "Setting", "Lat", "Lon", "Score", "ha", "Elev m"],
+                       [0.06, 0.18, 0.18, 0.18, 0.1, 0.1, 0.12], fontsize=8)
+            else:
+                ax.axis("off")
+            ml = gems.get("ml")
+            text = ("Gem crystals are far smaller than a 20 m pixel and cannot be detected directly. The maps rank the "
+                    "host rocks and settings in which the gems of the Himalaya-Karakoram form: marble (ruby, spinel), "
+                    "granitic pegmatite (aquamarine, topaz, tourmaline, garnet), pegmatite-mafic contacts (emerald, "
+                    "beryl) and ultramafic rocks (peridot, nephrite), using Sentinel-2 spectral evidence on exposed "
+                    "bedrock (slope >= 15 deg, snow, vegetation and sediments removed). Target zones are the top 1 % of "
+                    "the region for each setting. They prioritise field visits and are not proven deposits.")
+            if ml:
+                text += (f" A data-driven Random Forest was trained on {ml['occurrences']} known localities"
+                         + (f" (cross-validated AUC {ml['cv_auc']:.2f})." if ml.get("cv_auc") else "."))
+            fig.text(0.06, 0.26, textwrap.fill(text, 100), fontsize=8.5, va="top", color="#333")
             pdf.savefig(fig)
             plt.close(fig)
 

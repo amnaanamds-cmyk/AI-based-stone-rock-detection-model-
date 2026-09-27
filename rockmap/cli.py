@@ -249,6 +249,28 @@ def cmd_region_analyze(a):
         f"{HAZARD_CLASSES[int(k)][0]} {v:,.1f}" for k, v in res["hazard_km2"].items()))
 
 
+def cmd_region_gems(a):
+    from .gems import parse_occurrences
+    r = _region(a)
+    occ = None
+    if a.occurrences:
+        p = Path(a.occurrences)
+        occ = parse_occurrences(p.read_bytes(), p.name)
+        r.set_gem_occurrences(occ)
+    res = r.gem_analysis(occ, _progress)
+    print(f"\n{res['targets_total']} gem target zones")
+    for m in res["models"]:
+        v = m["validation"]
+        val = f"  validation: AUC {v['auc']:.2f}, {v['top20'] * 100:.0f}% of {v['n']} localities in top 20%" if v.get("n") else ""
+        print(f"  {m['name']:32s} {m['targets']:3d} zones  ({m['gems']}){val}")
+    for t in res["targets_top"][:10]:
+        print(f"  #{t['id']:<4d} {t['lat']:.5f}N {t['lon']:.5f}E  {t['model_name']:32s} score {t['mean_score']:5.1f} "
+              f"{t['area_ha']:6.1f} ha")
+    if res.get("ml"):
+        print(f"Data-driven model: {res['ml']}")
+    r.build_mosaics()
+
+
 def cmd_region_label_units(a):
     mapping = dict(pair.split("=") for pair in a.assign)
     print(_region(a).label_clusters(mapping, _progress))
@@ -487,6 +509,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--tiles", nargs="+")
     s = rarg("analyze", "mineral-alteration targets, landslide susceptibility, spectral units", cmd_region_analyze)
     s.add_argument("--units", type=int, default=10, help="number of spectral units (2-16)")
+    s = rarg("gems", "gemstone prospectivity (ruby, aquamarine, topaz, emerald, peridot ...)", cmd_region_gems)
+    s.add_argument("--occurrences", help="known gem localities: CSV (lat,lon,gem,name) or GeoJSON points")
     s = rarg("label-units", "turn spectral units into a lithology map", cmd_region_label_units)
     s.add_argument("assign", nargs="+", help="UNIT=CLASS pairs, e.g. 1=4 2=7 3=6")
     s = rarg("mosaic", "build region-wide GeoTIFF mosaics with overviews", cmd_region_mosaic)

@@ -20,8 +20,9 @@ from .db import Database
 from .jobs import handler
 
 bp = Blueprint("regions", __name__)
-LAYERS = ("rgb", "falsecolor", "hillshade", "surface", "lithology", "confidence", "alteration", "hazard", "clusters")
-STAGES = {"acquire": "region_acquire", "analyze": "region_analyze", "train": "region_train",
+LAYERS = ("rgb", "falsecolor", "hillshade", "surface", "lithology", "confidence", "alteration", "hazard", "clusters",
+          "gems", "gem_marble", "gem_pegmatite", "gem_contact", "gem_ultramafic", "gem_ml")
+STAGES = {"acquire": "region_acquire", "analyze": "region_analyze", "gems": "region_gems", "train": "region_train",
           "classify": "region_classify", "products": "region_products", "pipeline": "region_pipeline"}
 
 
@@ -128,7 +129,8 @@ def _do_products(ctx, region: Region, a=0.0, b=1.0):
     obs = ctx.db.all("observations", "region_id = ?", (ctx.job["region_id"],))
     validation = region.field_validation(obs) if obs and stats.get("classified_km2") else None
     region_report(region, out / "report.pdf", load_meta(model) if model else None, stats,
-                  os.environ.get("ROCKMAP_ORGANISATION", ""), analytics=region.analytics(), validation=validation)
+                  os.environ.get("ROCKMAP_ORGANISATION", ""), analytics=region.analytics(), validation=validation,
+                  gems=region.gems())
 
 
 def _region_for(ctx) -> Region:
@@ -161,6 +163,29 @@ def job_region_analyze(ctx):
     _region_for(ctx).analyze(int(ctx.params.get("n_clusters", 10)), ctx.progress, ctx.log)
 
 
+def gem_occurrences(db: Database, region: Region, region_id: int) -> list[dict]:
+    """Known gem localities: uploaded lists + field-app finds that name a gem."""
+    from ..gems import GEM_TYPES
+    occ = list(region.gem_occurrences())
+    for o in db.all("observations", "region_id = ? AND gem IS NOT NULL AND gem != ''", (region_id,)):
+        occ.append({"lat": o["lat"], "lon": o["lon"], "gem": o["gem"], "name": f"field #{o['id']}",
+                    "model": GEM_TYPES.get(o["gem"]), "source": "field"})
+    return occ
+
+
+def _do_gems(ctx, region: Region, a=0.0, b=1.0):
+    occ = gem_occurrences(ctx.db, region, ctx.job["region_id"])
+    ctx.log(f"known gem occurrences: {len(occ)}")
+    region.gem_analysis(occ, _scaled(ctx, a, b), ctx.log)
+
+
+@handler("region_gems")
+def job_region_gems(ctx):
+    region = _region_for(ctx)
+    _do_gems(ctx, region, 0.0, 0.85)
+    region.build_mosaics(_scaled(ctx, 0.85, 1.0))
+
+
 @handler("region_label_units")
 def job_region_label_units(ctx):
     region = _region_for(ctx)
@@ -170,14 +195,15 @@ def job_region_label_units(ctx):
 
 @handler("region_pipeline")
 def job_region_pipeline(ctx):
-    """Acquire -> analytics -> (train) -> classify -> mosaics, statistics, GeoJSON and PDF.
+    """Acquire -> analytics -> gem prospectivity -> (train) -> classify -> mosaics, statistics, GeoJSON, PDF.
 
     Without a model and without training data the lithology step is skipped, but imagery,
     surface cover, alteration targets, landslide susceptibility and spectral units are produced.
     """
     region = _region_for(ctx)
     _do_acquire(ctx, region, 0.0, 0.4)
-    region.analyze(int(ctx.params.get("n_clusters", 10)), _scaled(ctx, 0.4, 0.55), ctx.log)
+    region.analyze(int(ctx.params.get("n_clusters", 10)), _scaled(ctx, 0.4, 0.5), ctx.log)
+    _do_gems(ctx, region, 0.5, 0.55)
     model_id = ctx.params.get("model_id")
     if not model_id:
         feats, _counts = _training_features(ctx.db, region, ctx.job["region_id"])
@@ -282,10 +308,14 @@ def region_page(region_id):
     validation = region.field_validation(obs) if obs and summary_classified(region) else None
     products.update({n: (region.folder / "products" / n).exists() for n in ("targets.csv", "targets.geojson")})
     share_url = url_for("regions.share_page", token=row["share_token"], _external=True) if row.get("share_token") else None
-    return render_template("region.html", row=row, region=region, cfg=region.config, summary=region.summary(),
+    from ..gems import GEM_MODELS, GEM_NAMES
+    gems = region.gems()
+    products.update({n: (region.folder / "products" / n).exists() for n in ("gem_targets.csv", "gem_targets.geojson")})
+    return render_template("region.html", gems=gems, gem_models=GEM_MODELS, gem_names=GEM_NAMES,
+                           gem_occ=gem_occurrences(db, region, region_id), row=row, region=region, cfg=region.config, summary=region.summary(),
                            state=st, jobs=jobs, active=active, counts=counts, refs=refs, layers=layers,
                            products=products, models=models, stats=stats, analytics=analytics,
-                           insights=insights(stats, analytics), hazard_classes=HAZARD_CLASSES,
+                           insights=insights(stats, analytics, gems), hazard_classes=HAZARD_CLASSES,
                            validation=validation, share_url=share_url,
                            districts=(region.folder / "districts.geojson").exists(),
                            version=st.get("mosaic_version", 0), algorithms=ALGORITHMS,
@@ -529,9 +559,12 @@ def share_page(token):
     analytics = region.analytics()
     stats = _stats(region)
     layers = [lname for lname in LAYERS if (region.folder / "mosaic" / f"{lname}.tif").exists()]
+    from ..gems import GEM_MODELS
+    gems = region.gems()
     return render_template("share.html", row=row, cfg=region.config, token=token, layers=layers,
                            version=st.get("mosaic_version", 0), stats=stats, analytics=analytics,
-                           insights=insights(stats, analytics), hazard_classes=HAZARD_CLASSES,
+                           gems=gems, gem_models=GEM_MODELS,
+                           insights=insights(stats, analytics, gems), hazard_classes=HAZARD_CLASSES,
                            classes=[{"id": c.id, "name": c.name, "color": c.color} for c in ROCK_CLASSES])
 
 
@@ -553,6 +586,11 @@ def share_query(token):
 @bp.route("/share/<token>/api/targets")
 def share_targets(token):
     return _targets(_region(_shared(token)))
+
+
+@bp.route("/share/<token>/api/gem-targets")
+def share_gem_targets(token):
+    return _targets(_region(_shared(token)), "gem_targets.geojson")
 
 
 # ----------------------------------------------------------------------------- map tiles
@@ -627,8 +665,67 @@ def api_region_targets(region_id):
     return _targets(_region(_region_row(region_id)))
 
 
-def _targets(region: Region):
-    p = region.folder / "products" / "targets.geojson"
+@bp.route("/api/regions/<int:region_id>/gem-targets")
+@requires("viewer")
+def api_region_gem_targets(region_id):
+    return _targets(_region(_region_row(region_id)), "gem_targets.geojson")
+
+
+@bp.route("/api/regions/<int:region_id>/gem-occurrences")
+@requires("viewer")
+def api_region_gem_occurrences(region_id):
+    region = _region(_region_row(region_id))
+    occ = gem_occurrences(_db(), region, region_id)
+    return jsonify({"type": "FeatureCollection", "features": [
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [o["lon"], o["lat"]]},
+         "properties": {"gem": o.get("gem"), "name": o.get("name"), "model": o.get("model"),
+                        "source": o.get("source", "upload")}} for o in occ]})
+
+
+@bp.post("/regions/<int:region_id>/gem-occurrences")
+@requires("analyst")
+def region_gem_occurrences(region_id):
+    """Upload known gem localities (CSV lat,lon,gem,name or GeoJSON points)."""
+    from ..gems import parse_occurrences
+    region = _region(_region_row(region_id))
+    if request.form.get("action") == "clear":
+        region.set_gem_occurrences([])
+        audit("gems.occurrences.clear", str(region_id))
+        flash("Known gem localities removed.", "ok")
+        return redirect(url_for("regions.region_page", region_id=region_id))
+    up = request.files.get("file")
+    try:
+        if not up or not up.filename:
+            raise ValueError("choose a CSV or GeoJSON file")
+        occ = parse_occurrences(up.read(), up.filename)
+        if not occ:
+            raise ValueError("no points found (CSV needs lat, lon and gem columns)")
+        existing = region.gem_occurrences() if request.form.get("mode") == "append" else []
+        region.set_gem_occurrences(existing + occ)
+        unknown = sorted({o["gem"] for o in occ if not o["model"]})
+        audit("gems.occurrences.upload", f"{region_id}: {len(occ)} points")
+        flash(f"{len(occ)} known gem localities saved." + (f" Unrecognised gem names (kept, not used for "
+              f"per-model validation): {', '.join(unknown)}" if unknown else "") +
+              " Run 'Gem prospectivity' to validate the maps with them.", "ok")
+    except (ValueError, KeyError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        flash(f"Localities rejected: {e}", "error")
+    return redirect(url_for("regions.region_page", region_id=region_id))
+
+
+@bp.route("/regions/<int:region_id>/gem_targets.<fmt>")
+@requires("viewer")
+def region_gem_targets_file(region_id, fmt):
+    if fmt not in ("csv", "geojson"):
+        abort(404)
+    p = _region(_region_row(region_id)).folder / "products" / f"gem_targets.{fmt}"
+    if not p.exists():
+        abort(404)
+    return Response(p.read_bytes(), mimetype="text/csv" if fmt == "csv" else "application/geo+json",
+                    headers={"Content-Disposition": f"attachment; filename=region{region_id}_gem_targets.{fmt}"})
+
+
+def _targets(region: Region, name: str = "targets.geojson"):
+    p = region.folder / "products" / name
     if not p.exists():
         return jsonify({"type": "FeatureCollection", "features": []})
     return Response(p.read_text(encoding="utf-8"), mimetype="application/json")

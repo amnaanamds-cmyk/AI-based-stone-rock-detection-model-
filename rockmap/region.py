@@ -407,6 +407,13 @@ class Region:
         products = {"rgb": (3, acquired), "falsecolor": (3, acquired), "hillshade": (1, acquired),
                     "surface": (1, acquired), "lithology": (1, classified), "confidence": (1, classified),
                     "alteration": (1, analysed), "hazard": (1, analysed), "clusters": (1, analysed)}
+        gem_tiles = [k for k in self.tile_keys if (self.tile_dir(k) / "gems.tif").exists()]
+        from .gems import GEM_MODELS
+        products["gems"] = (1, gem_tiles)
+        for m in GEM_MODELS:
+            products[f"gem_{m.key}"] = (1, gem_tiles)
+        if gem_tiles and all(_band_count(self.tile_dir(k) / "gems.tif") >= 7 for k in gem_tiles):
+            products["gem_ml"] = (1, gem_tiles)
         paths = {}
         for pi, (name, (count, keys)) in enumerate(products.items()):
             if not keys:
@@ -441,6 +448,12 @@ class Region:
 
     def _render_tile(self, key: str, name: str) -> np.ndarray:
         d = self.tile_dir(key)
+        if name.startswith("gem"):
+            from .gems import GEM_MODELS
+            band = 1 if name == "gems" else 7 if name == "gem_ml" else \
+                3 + [m.key for m in GEM_MODELS].index(name[4:])
+            with rasterio.open(d / "gems.tif") as src:
+                return src.read(band)[None]
         if name in ("alteration", "hazard", "clusters"):
             band = {"alteration": 1, "hazard": 3, "clusters": 4}[name]
             with rasterio.open(d / "analytics.tif") as src:
@@ -774,6 +787,241 @@ class Region:
 
 
 
+    # -- 9. gemstone prospectivity -----------------------------------------------------
+    def gems(self) -> Optional[dict]:
+        p = self.folder / "products" / "gems.json"
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+
+    def gem_occurrences(self) -> list[dict]:
+        p = self.folder / "gem_occurrences.json"
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+
+    def set_gem_occurrences(self, occurrences: list[dict]) -> None:
+        (self.folder / "gem_occurrences.json").write_text(json.dumps(occurrences, indent=1), encoding="utf-8")
+
+    def _cos_i(self, key: str, scene):
+        from .preprocessing import illumination
+        sun = self.state()["tiles"].get(key, {}).get("sun")
+        if scene.dem is None or not sun or not np.isfinite(scene.dem).any():
+            return None
+        return illumination(scene.dem, self.config.resolution, sun[0], sun[1])
+
+    def _gem_usable(self, scene):
+        """Bare, snow-free, sparsely vegetated rock with a buffer around snow and data gaps."""
+        from scipy import ndimage as ndi
+        from .config import SNOW_CLASS
+        r = np.nan_to_num(scene.reflectance)
+        ndvi = (r[3] - r[2]) / (r[3] + r[2] + 1e-6)
+        lc = scene.landcover if scene.landcover is not None else np.zeros(ndvi.shape, np.uint8)
+        edge = ndi.binary_dilation((lc == SNOW_CLASS) | ~scene.valid, iterations=5)
+        return scene.usable & ~edge & (ndvi <= 0.3) & (r.mean(axis=0) >= 0.06)
+
+    def gem_analysis(self, occurrences: Optional[list[dict]] = None, progress: Progress = _noop,
+                     log: Log = print, samples_per_tile: int = 4000, seed: int = 0) -> dict:
+        """Gemstone prospectivity for every acquired tile (see :mod:`rockmap.gems`).
+
+        Writes ``tiles/*/gems.tif`` (band 1 best score+1, 2 best model, 3-6 model scores+1,
+        7 data-driven score+1 when trained) and ``products/gems.json``, ``gem_targets.csv/.geojson``.
+        """
+        from .gems import (FEATURE_KEYS, GEM_MODELS, EVIDENCE, EvidenceStats, bedrock_mask, evidence_layers,
+                           find_gem_targets, model_scores, raw_evidence, success_rates)
+        occurrences = list(occurrences if occurrences is not None else self.gem_occurrences())
+        st = self.state()["tiles"]
+        keys = [k for k in self.tile_keys if st.get(k, {}).get("acquired")]
+        if not keys:
+            raise ValueError("No acquired tiles - run data acquisition first")
+        self.build_vrts()
+        rng = np.random.default_rng(seed)
+        ts = self.config.tile_size
+        # occurrences -> region pixel coordinates
+        occ_px = []
+        if occurrences:
+            xs, ys = warp_transform("EPSG:4326", self.crs, [o["lon"] for o in occurrences],
+                                    [o["lat"] for o in occurrences])
+            for o, x, y in zip(occurrences, xs, ys):
+                c, r = ~self.transform @ (x, y)
+                occ_px.append((int(r), int(c)))
+
+        # pass 1: robust region-wide statistics of the spectral evidence
+        samples = {k: [] for k in EVIDENCE}
+        for i, key in enumerate(keys):
+            progress(0.02 + 0.2 * i / len(keys), f"Gem evidence statistics: tile {key} ({i + 1}/{len(keys)})")
+            _t, scene, _sl = self._read_tile(key)
+            usable = self._gem_usable(scene)
+            # statistics describe *bedrock*: fields, orchards, fans and terraces would widen the
+            # spread of the band ratios and hide the weak anomalies of marble and pegmatite
+            r6 = np.nan_to_num(scene.reflectance)
+            ndvi = (r6[3] - r6[2]) / (r6[3] + r6[2] + 1e-6)
+            rock = bedrock_mask(scene.dem, self.config.resolution)
+            fit_mask = usable & (ndvi < 0.2) & (rock if rock is not None else True)
+            rr, cc = np.nonzero(fit_mask if fit_mask.sum() >= 500 else usable)
+            if len(rr) < 50:
+                continue
+            take = rng.choice(len(rr), min(samples_per_tile, len(rr)), replace=False)
+            raw = raw_evidence(scene.reflectance, self._cos_i(key, scene), usable)
+            for k in EVIDENCE:
+                samples[k].append(raw[k][rr[take], cc[take]])
+        if not samples["brightness"]:
+            raise ValueError("No usable (snow-, cloud- and vegetation-free) rock pixels")
+        stats = EvidenceStats.fit({k: np.concatenate(v) for k, v in samples.items()})
+
+        # pass 2: evidence, model scores, targets
+        n_models = len(GEM_MODELS)
+        px_km2 = (self.config.resolution / 1000) ** 2
+        high = np.zeros(n_models + 1)
+        background = [[] for _ in range(n_models + 1)]
+        occ_scores = [[None] * (n_models + 1) for _ in occurrences]
+        occ_feats = [None] * len(occurrences)
+        bg_feats = []
+        targets: list[dict] = []
+        for i, key in enumerate(keys):
+            progress(0.25 + 0.55 * i / len(keys), f"Gem prospectivity: tile {key} ({i + 1}/{len(keys)})")
+            t, scene, sl = self._read_tile(key, halo=16)
+            usable = self._gem_usable(scene)
+            lith = None
+            cpath = self.tile_dir(key) / "classified.tif"
+            if cpath.exists():
+                lith = np.zeros(usable.shape, np.uint8)
+                with rasterio.open(cpath) as src:
+                    lith[sl] = src.read(1)
+            ev = evidence_layers(scene.reflectance, usable, stats, self.config.resolution, lith, scene.dem,
+                                 self._cos_i(key, scene))
+            scores = model_scores(ev)
+            core_ok = usable[sl] & self.aoi_mask(t.info)
+            sc = np.where(core_ok[None], scores[:, sl[0], sl[1]], 0)
+            best = sc.max(axis=0)
+            dom = np.where(core_ok, np.argmax(sc, axis=0) + 1, 0).astype(np.uint8)
+            allsc = np.concatenate([best[None], sc])
+            bands = [np.where(core_ok, np.round(best) + 1, 0), dom] + \
+                    [np.where(core_ok, np.round(sc[m]) + 1, 0) for m in range(n_models)]
+            write_raster(self.tile_dir(key) / "gems.tif", np.stack(bands).astype(np.uint8), t.info, nodata=0,
+                         descriptions=["gem_score_plus1", "gem_model"] + [f"{m.key}_plus1" for m in GEM_MODELS])
+            for m in range(n_models + 1):
+                high[m] += float(((allsc[m] >= 75) & core_ok).sum()) * px_km2
+            rr, cc = np.nonzero(core_ok)
+            if len(rr):
+                take = rng.choice(len(rr), min(3000, len(rr)), replace=False)
+                for m in range(n_models + 1):
+                    background[m].append(allsc[m][rr[take], cc[take]])
+                bg_feats.append(np.stack([ev[f][sl][rr[take], cc[take]] for f in FEATURE_KEYS], 1))
+            y0, x0 = int(t.window.row_off), int(t.window.col_off)
+            for j, (r, c) in enumerate(occ_px):
+                if y0 <= r < y0 + ts and x0 <= c < x0 + ts:
+                    lr, lc = r - y0, c - x0
+                    r0, r1, c0, c1 = max(0, lr - 1), lr + 2, max(0, lc - 1), lc + 2   # 3x3 window: GPS / map error
+                    occ_scores[j] = [float(allsc[m][r0:r1, c0:c1].max()) for m in range(n_models + 1)]
+                    win = [ev[f][sl][r0:r1, c0:c1].reshape(-1) for f in FEATURE_KEYS]
+                    occ_feats[j] = np.stack(win, 1)
+            self._update_tile(key, gems=True)
+
+        bg = [np.concatenate(b) if b else np.zeros(0) for b in background]
+        # validation with known occurrences
+        validation = {"overall": success_rates([s[0] for s in occ_scores if s[0] is not None], bg[0])}
+        for mi, m in enumerate(GEM_MODELS, start=1):
+            vals = [s[mi] for o, s in zip(occurrences, occ_scores) if s[0] is not None and o.get("model") == m.key]
+            validation[m.key] = success_rates(vals, bg[mi])
+        inside = sum(1 for s in occ_scores if s[0] is not None)
+
+        # optional data-driven model (presence / background Random Forest)
+        ml = self._gem_ml(occ_feats, bg_feats, keys, stats, progress, log, seed) if inside >= 8 else None
+
+        from .gems import MAX_TARGETS_PER_MODEL, target_cutoffs
+        cutoffs = target_cutoffs({m.key: bg[i + 1] for i, m in enumerate(GEM_MODELS)})
+        # targets = compact zones above each model's own top-1 % threshold
+        progress(0.96, "Delineating gem targets")
+        for key in keys:
+            t = self.tile(key)
+            with rasterio.open(self.tile_dir(key) / "gems.tif") as src:
+                sc = np.clip(src.read(list(range(3, 3 + n_models))).astype(np.float32) - 1, 0, None)
+            dem_p = self.tile_dir(key) / "dem.tif"
+            dem_c = None
+            if dem_p.exists():
+                with rasterio.open(dem_p) as src:
+                    dem_c = src.read(1)
+            for mi, m in enumerate(GEM_MODELS):
+                only = np.zeros_like(sc)
+                only[mi] = sc[mi]
+                found = find_gem_targets(only, t.info.transform, px_km2 * 100, threshold=cutoffs[m.key],
+                                         elevation=dem_c)
+                targets += [dict(tt, tile=key) for tt in found if tt["model"] == m.key]
+        ranked = []
+        for m in GEM_MODELS:   # best first, at least 500 m apart, so one outcrop is not listed ten times
+            kept = []
+            for t in sorted((t for t in targets if t["model"] == m.key), key=lambda t: -t["rank_score"]):
+                if all(math.hypot(t["x"] - k["x"], t["y"] - k["y"]) >= 500 for k in kept):
+                    kept.append(t)
+                if len(kept) >= MAX_TARGETS_PER_MODEL:
+                    break
+            ranked += kept
+        targets = sorted(ranked, key=lambda t: -t["rank_score"])
+        if targets:
+            lons, lats = warp_transform(self.crs, "EPSG:4326", [t["x"] for t in targets], [t["y"] for t in targets])
+            for n, (t, lo, la) in enumerate(zip(targets, lons, lats), start=1):
+                t.update(id=n, lon=round(lo, 6), lat=round(la, 6))
+        out = self.folder / "products"
+        out.mkdir(exist_ok=True)
+        _write_gem_targets(out, targets)
+        per_model = []
+        for mi, m in enumerate(GEM_MODELS, start=1):
+            per_model.append({"key": m.key, "name": m.name, "gems": m.gems, "color": m.color, "setting": m.setting,
+                              "high_km2": round(high[mi], 2), "target_cutoff": round(cutoffs[m.key], 1),
+                              "targets": sum(1 for t in targets if t["model"] == m.key),
+                              "validation": validation[m.key]})
+        result = {"created": time.strftime("%Y-%m-%d %H:%M:%S"), "stats": stats.to_dict(), "models": per_model,
+                  "high_km2": round(high[0], 2), "targets_total": len(targets), "targets_top": targets[:30],
+                  "occurrences": len(occurrences), "occurrences_inside": inside, "validation": validation,
+                  "ml": ml}
+        (out / "gems.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+        self._set(gems_at=result["created"])
+        progress(1.0, f"Gem prospectivity complete: {len(targets)} targets")
+        return result
+
+    def _gem_ml(self, occ_feats, bg_feats, keys, stats, progress, log, seed) -> Optional[dict]:
+        """Random Forest trained on known occurrences vs. random background, with grouped CV."""
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.metrics import roc_auc_score
+        from sklearn.model_selection import GroupKFold
+        from .gems import FEATURE_KEYS, evidence_layers
+        pos = [(j, f) for j, f in enumerate(occ_feats) if f is not None]
+        X_pos = np.concatenate([f for _, f in pos])
+        g_pos = np.concatenate([np.full(len(f), j) for j, f in pos])
+        bgf = np.concatenate(bg_feats)
+        rng = np.random.default_rng(seed)
+        bgf = bgf[rng.choice(len(bgf), min(len(bgf), 20 * len(X_pos)), replace=False)]
+        X = np.concatenate([X_pos, bgf])
+        y = np.concatenate([np.ones(len(X_pos)), np.zeros(len(bgf))])
+        groups = np.concatenate([g_pos, 10_000 + rng.integers(0, 5, len(bgf))])
+        rf = RandomForestClassifier(n_estimators=300, min_samples_leaf=3, class_weight="balanced",
+                                    random_state=seed, n_jobs=-1)
+        aucs = []
+        for tr, te in GroupKFold(n_splits=min(5, len(pos))).split(X, y, groups):
+            if len(set(y[te])) < 2:
+                continue
+            rf.fit(X[tr], y[tr])
+            aucs.append(roc_auc_score(y[te], rf.predict_proba(X[te])[:, 1]))
+        rf.fit(X, y)
+        log(f"gem ML model: {len(pos)} occurrences, cross-validated AUC "
+            f"{np.mean(aucs):.3f}" if aucs else "gem ML model trained (too few folds for CV)")
+        for i, key in enumerate(keys):
+            progress(0.8 + 0.15 * i / len(keys), f"Data-driven gem model: tile {key}")
+            t, scene, sl = self._read_tile(key, halo=16)
+            usable = self._gem_usable(scene)
+            ev = evidence_layers(scene.reflectance, usable, stats, self.config.resolution, None, scene.dem,
+                                 self._cos_i(key, scene))
+            core_ok = usable[sl] & self.aoi_mask(t.info)
+            F = np.stack([ev[f][sl] for f in FEATURE_KEYS], -1).reshape(-1, len(FEATURE_KEYS))
+            prob = np.zeros(core_ok.size, np.float32)
+            idx = np.nonzero(core_ok.ravel())[0]
+            if len(idx):
+                prob[idx] = rf.predict_proba(F[idx])[:, 1]
+            band = np.where(core_ok, np.round(prob.reshape(core_ok.shape) * 100) + 1, 0).astype(np.uint8)
+            with rasterio.open(self.tile_dir(key) / "gems.tif") as src:
+                data = src.read()[:6]
+            write_raster(self.tile_dir(key) / "gems.tif", np.concatenate([data, band[None]]), t.info, nodata=0)
+        return {"occurrences": len(pos), "cv_auc": round(float(np.mean(aucs)), 3) if aucs else None,
+                "importance": dict(zip(FEATURE_KEYS, [round(float(v), 3) for v in rf.feature_importances_]))}
+
+
 def replace_file(src: Path, dst: Path, attempts: int = 40) -> None:
     """os.replace with retries: on Windows the target may briefly be open in another thread/process."""
     for i in range(attempts):
@@ -838,3 +1086,22 @@ def _write_targets(out: Path, targets: list[dict]) -> None:
         w.writerow(cols)
         for t in targets:
             w.writerow([t.get(c, "") for c in cols])
+
+
+def _write_gem_targets(out: Path, targets: list[dict]) -> None:
+    import csv
+    feats = [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [t["lon"], t["lat"]]},
+              "properties": {k: v for k, v in t.items() if k not in ("x", "y")}} for t in targets]
+    (out / "gem_targets.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": feats}),
+                                             encoding="utf-8")
+    cols = ["id", "lat", "lon", "model_name", "gems", "mean_score", "peak_score", "area_ha", "elevation_m", "tile"]
+    with open(out / "gem_targets.csv", "w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(cols)
+        for t in targets:
+            w.writerow([t.get(c, "") for c in cols])
+
+
+def _band_count(path: Path) -> int:
+    with rasterio.open(path) as src:
+        return src.count

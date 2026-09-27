@@ -267,3 +267,29 @@ def test_field_observations(client, app, small_scene):
     assert v.post("/api/observations", json={"lat": 35, "lon": 74, "class_id": 1}).status_code == 403
     oid = gj["features"][0]["properties"]["id"]
     assert client.delete(f"/api/observations/{oid}").get_json()["ok"]
+
+
+def test_gem_workflow_in_dashboard(client, app, small_scene):
+    rid, (w, s, e, n) = _local_region(client, small_scene)
+    client.post(f"/regions/{rid}/run", data={"stage": "acquire"})
+    csv_data = f"lat,lon,gem,name\n{(s + n) / 2},{(w + e) / 2},ruby,Test locality\n".encode()
+    r = client.post(f"/regions/{rid}/gem-occurrences", data={"file": (io.BytesIO(csv_data), "known.csv"),
+                                                             "mode": "replace"},
+                    content_type="multipart/form-data", follow_redirects=True)
+    assert b"1 known gem localities saved" in r.data
+    # a field find with a gem is also a known locality
+    assert client.post("/api/observations", json={"lat": (s + n) / 2, "lon": (w + e) / 2 + 0.001, "class_id": 1,
+                                                   "gem": "spinel"}).status_code == 201
+    assert client.post("/api/observations", json={"lat": (s + n) / 2, "lon": (w + e) / 2, "class_id": 1,
+                                                   "gem": "kryptonite"}).status_code == 400
+    occ = client.get(f"/api/regions/{rid}/gem-occurrences").get_json()
+    assert len(occ["features"]) == 2
+    client.post(f"/regions/{rid}/run", data={"stage": "gems"})
+    page = client.get(f"/regions/{rid}").get_data(as_text=True)
+    assert "Gemstone prospectivity" in page and "Marble-hosted ruby" in page
+    assert client.get(f"/api/regions/{rid}/gem-targets").get_json()["type"] == "FeatureCollection"
+    assert client.get(f"/regions/{rid}/gem_targets.csv").status_code == 200
+    assert client.get(f"/tiles/{rid}/gems/12/0/0.png").status_code == 200
+    assert client.get(f"/tiles/{rid}/gem_pegmatite/12/0/0.png").status_code == 200
+    field = client.get("/field/").get_data(as_text=True)
+    assert "aquamarine" in field.lower()

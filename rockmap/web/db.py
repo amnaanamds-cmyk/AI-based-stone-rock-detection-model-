@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS observations (
     certainty   INTEGER NOT NULL DEFAULT 2,
     note        TEXT,
     photo       TEXT,
+    gem         TEXT,
     observed_at TEXT,
     author      TEXT,
     created     TEXT NOT NULL
@@ -126,6 +127,7 @@ MIGRATIONS = {
     "scenes": {"created_by": "TEXT"},
     "regions": {"share_token": "TEXT"},
     "users": {"must_change": "INTEGER NOT NULL DEFAULT 0"},
+    "observations": {"gem": "TEXT"},
     "models": {"region_id": "INTEGER", "created_by": "TEXT"},
     "jobs": {"region_id": "INTEGER", "user": "TEXT", "worker": "TEXT", "cancel": "INTEGER NOT NULL DEFAULT 0",
              "attempts": "INTEGER NOT NULL DEFAULT 0", "heartbeat": "REAL", "started": "TEXT"},

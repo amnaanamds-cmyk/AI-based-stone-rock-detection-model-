@@ -47,5 +47,9 @@ PRESETS: dict[str, dict] = {
     "astore": {"name": "Astore valley / Nanga Parbat east (40 x 40 km)", "geometry": _box(74.86, 35.37, 20)},
     "chilas": {"name": "Chilas - Indus valley (40 x 40 km)", "geometry": _box(74.10, 35.42, 20)},
     "khaplu": {"name": "Khaplu - Shyok valley (40 x 40 km)", "geometry": _box(76.33, 35.16, 20)},
+    "shigar": {"name": "Shigar valley - pegmatite gem belt (40 x 40 km)", "geometry": _box(75.70, 35.55, 20),
+               "note": "Aquamarine, topaz, tourmaline and garnet pegmatites of the Shigar / Braldu valleys."},
+    "hunza-gems": {"name": "Hunza ruby & spinel marble belt (40 x 40 km)", "geometry": _box(74.66, 36.32, 20),
+                   "note": "Marble-hosted ruby and spinel of central Hunza (Karimabad - Aliabad - Ganesh)."},
     "gilgit-small": {"name": "Gilgit city (10 x 10 km quick test)", "geometry": _box(74.31, 35.92, 5)},
 }
