@@ -65,7 +65,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 form.inline { display: inline; }
 label { display: block; font-weight: 600; font-size: 13px; margin: 12px 0 4px; }
 label.check { display: flex; gap: 8px; align-items: center; font-weight: 500; }
-input[type=text], input[type=number], select, textarea, input[type=file] {
+input[type=text], input[type=number], input[type=password], input[type=email], select, textarea, input[type=file] {
   width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font: inherit;
 }
 textarea { font-family: var(--mono); font-size: 13px; }
