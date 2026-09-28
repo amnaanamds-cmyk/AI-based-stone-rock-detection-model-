@@ -147,10 +147,10 @@ def _synthetic_region(db, root: Path, progress: Callable, size: int = 512, epoch
 
 
 def _gb_overview(db, root: Path, progress: Callable) -> None:
-    """Whole Gilgit-Baltistan at 100 m: imagery, rock units, alteration, hazard and gem layers (~40 min)."""
+    """Whole Gilgit-Baltistan at 100 m: imagery, rock units, alteration, hazard and gem layers (30-60 min)."""
     from .presets import PRESETS
     from .region import RegionConfig
-    progress(0.0, "Creating the whole Gilgit-Baltistan overview (downloads Sentinel-2 + Copernicus DEM, ~40 min)")
+    progress(0.0, "Creating the whole Gilgit-Baltistan overview (downloads Sentinel-2 + Copernicus DEM, 30-60 min)")
     p = PRESETS["gilgit-baltistan-overview"]
     cfg = RegionConfig(name=GB_NAME, aoi=p["geometry"], resolution=p["resolution"])
     rid = _new_region(db, root, GB_NAME, cfg, "gilgit-baltistan-overview")

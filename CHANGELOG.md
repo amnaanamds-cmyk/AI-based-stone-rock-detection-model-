@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.4.0: whole-region map
+- Whole-Gilgit-Baltistan overview at 100 m (`run.sh --gb` / `run.bat --gb`, preset *Gilgit-Baltistan overview map*): a complete real map in under an hour.
+- Composites now cover every Sentinel-2 granule of large tiles (candidates round-robin per granule) and measure coverage inside the area of interest. Memory is bounded: a scene cap per tile and float16 storage.
+- docs/SATELLITE_DATA.md: where the imagery comes from, and why Google Earth imagery cannot be used.
+
 ## 2.3.0: gemstone prospectivity
 - New gem module: prospectivity models for marble-hosted ruby & spinel, pegmatite gems (aquamarine, topaz, tourmaline, garnet), emerald / beryl contacts, and ultramafic peridot / nephrite. Evidence statistics come from bedrock only; flat ground, fields and snow margins are masked.
 - Ranked target zones (top 1 % per setting, at least 500 m apart) with coordinates, area and elevation, as CSV / GeoJSON, a map, the PDF report and share links.

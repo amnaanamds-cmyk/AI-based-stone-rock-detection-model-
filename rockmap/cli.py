@@ -425,7 +425,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--real", action="store_true",
                    help="also download a real 40 x 40 km Gilgit region from Sentinel-2 (needs internet, ~5-10 min)")
     s.add_argument("--gb", action="store_true",
-                   help="also map the WHOLE of Gilgit-Baltistan at 100 m from Sentinel-2 (needs internet, ~40 min)")
+                   help="also map the WHOLE of Gilgit-Baltistan at 100 m from Sentinel-2 (needs internet, 30-60 min)")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=5000)
     s.add_argument("--no-serve", action="store_true", help="only build the demo data")

@@ -42,11 +42,11 @@ PRESETS: dict[str, dict] = {
                 "of imagery and takes hours; start with a sub-area to calibrate the model.",
     },
     "gilgit-baltistan-overview": {
-        "name": "Gilgit-Baltistan overview map (whole region at 100 m, ~40 min)",
+        "name": "Gilgit-Baltistan overview map (whole region at 100 m)",
         "geometry": GILGIT_BALTISTAN,
         "resolution": 100.0,
-        "note": "The quickest complete map of all of Gilgit-Baltistan: 15 tiles of 100 km at 100 m, about 40 min "
-                "and ~0.5 GB. Use it to see the whole region, then create 20 m regions for detailed work.",
+        "note": "The quickest complete map of all of Gilgit-Baltistan: 15 tiles of 100 km at 100 m, 30-60 min "
+                "and ~0.3 GB. Use it to see the whole region, then create 20 m regions for detailed work.",
     },
     "gilgit": {"name": "Gilgit city & surroundings (40 x 40 km)", "geometry": _box(74.31, 35.92, 20)},
     "hunza": {"name": "Hunza valley - Karimabad / Aliabad (40 x 40 km)", "geometry": _box(74.66, 36.32, 20)},

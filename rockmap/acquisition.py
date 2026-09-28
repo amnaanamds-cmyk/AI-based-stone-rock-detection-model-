@@ -374,10 +374,24 @@ def read_item(item: S2Item, grid: GeoInfo, threads: int = 7) -> tuple[np.ndarray
     return refl.astype(np.float32), scl
 
 
+def _granule(item: S2Item) -> str:
+    """MGRS granule of a scene, e.g. ``43SDB`` from ``S2A_43SDB_20250827_0_L2A``."""
+    if item.mgrs:
+        return item.mgrs
+    parts = item.id.split("_")
+    return parts[1] if len(parts) > 2 and len(parts[1]) == 5 else item.id
+
+
 def build_composite(grid: GeoInfo, items: Sequence[S2Item], dem: Optional[np.ndarray] = None,
                     max_items: int = 6, target_clear: float = 0.97, topo_correct: bool = True,
-                    log: Log = print, reader: Callable = read_item) -> tuple[np.ndarray, CompositeReport]:
+                    log: Log = print, reader: Callable = read_item,
+                    aoi: Optional[np.ndarray] = None) -> tuple[np.ndarray, CompositeReport]:
     """Median cloud-free composite on ``grid``.
+
+    ``max_items`` scenes are used *per Sentinel-2 granule* (100 x 100 km MGRS square): a large
+    tile (e.g. 100 km at 100 m) overlaps several granules, and the clearest scenes of one granule
+    must not crowd out the others. Candidates are visited round-robin over granules, best first.
+    Coverage is measured inside ``aoi`` (boolean mask) when given.
 
     Returns a (7, H, W) uint16 stack: 6 bands of reflectance x 10000 followed by an
     SCL-compatible code band (4 clear, 11 snow, 6 water, 0 no data).
@@ -391,9 +405,23 @@ def build_composite(grid: GeoInfo, items: Sequence[S2Item], dem: Optional[np.nda
     n_valid = np.zeros((h, w), np.int16)
     covered = np.zeros((h, w), bool)
     suns = []
-    for item in items[: max_items * 3]:
-        if len(rep.items) >= max_items or (len(rep.items) >= 2 and covered.mean() >= target_clear):
+    area = aoi if aoi is not None and aoi.any() else np.ones((h, w), bool)
+    groups: dict[str, list] = {}
+    for item in items:
+        groups.setdefault(_granule(item), []).append(item)
+    order = [g[i] for i in range(max(map(len, groups.values()), default=0)) for g in groups.values() if i < len(g)]
+    # memory and time stay bounded: about 3 x max_items scenes per tile in total, at least 2 per granule
+    per_granule = max(2, min(max_items, math.ceil(3 * max_items / max(1, len(groups)))))
+    used = {k: 0 for k in groups}
+    tried = {k: 0 for k in groups}
+    for item in order:
+        g = _granule(item)
+        if used[g] >= per_granule or tried[g] >= per_granule * 3:
+            continue
+        if len(rep.items) >= 2 and covered[area].mean() >= target_clear and all(
+                used[k] >= min(2, len(groups[k])) or tried[k] >= 3 for k in groups):
             break
+        tried[g] += 1
         try:
             refl, scl = reader(item, grid)
         except Exception as e:  # noqa: BLE001 - skip unreadable scenes, keep going
@@ -402,13 +430,14 @@ def build_composite(grid: GeoInfo, items: Sequence[S2Item], dem: Optional[np.nda
         finite = np.all(np.isfinite(refl), axis=0)
         clear = finite & np.isin(scl, SCL_CLEAR + (SCL_WATER,))
         snow = finite & (scl == SCL_SNOW)
-        if not (clear.any() or snow.any()):
+        if not ((clear & area).any() or (snow & area).any()):
+            tried[g] += max_items   # granule does not reach the area of interest: stop trying it
             continue
         if topo_correct and dem is not None and np.isfinite(dem).any():
             cos_i = illumination(dem, grid.pixel_size[0], item.sun_azimuth, item.sun_elevation)
             refl = c_correction(refl, cos_i, item.sun_elevation, clear)
-        c = np.where(clear[None], refl, np.nan)
-        s = np.where(snow[None], refl, np.nan)
+        c = np.where(clear[None], refl, np.nan).astype(np.float16)   # float16: ample for reflectance, half the RAM
+        s = np.where(snow[None], refl, np.nan).astype(np.float16)
         clear_obs.append(c)
         snow_obs.append(s)
         water_votes += (scl == SCL_WATER) & finite
@@ -417,7 +446,8 @@ def build_composite(grid: GeoInfo, items: Sequence[S2Item], dem: Optional[np.nda
         suns.append((item.sun_azimuth, item.sun_elevation))
         rep.items.append(item.id)
         rep.dates.append(item.date)
-        log(f"  {item.id} cloud {item.cloud_cover:.0f}% -> clear coverage {covered.mean() * 100:.1f}%")
+        used[g] += 1
+        log(f"  {item.id} cloud {item.cloud_cover:.0f}% -> clear coverage {covered[area].mean() * 100:.1f}%")
 
     out = np.zeros((7, h, w), np.uint16)
     if not clear_obs:
@@ -426,8 +456,8 @@ def build_composite(grid: GeoInfo, items: Sequence[S2Item], dem: Optional[np.nda
     import warnings
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)   # all-NaN slices -> NaN
-        med = np.nanmedian(np.stack(clear_obs), axis=0)
-        snow_med = np.nanmedian(np.stack(snow_obs), axis=0)
+        med = np.nanmedian(np.stack(clear_obs), axis=0).astype(np.float32)
+        snow_med = np.nanmedian(np.stack(snow_obs), axis=0).astype(np.float32)
     has_clear = np.all(np.isfinite(med), axis=0)
     has_snow = ~has_clear & np.all(np.isfinite(snow_med), axis=0)
     refl = np.where(has_clear[None], med, np.where(has_snow[None], snow_med, np.nan))
@@ -438,8 +468,8 @@ def build_composite(grid: GeoInfo, items: Sequence[S2Item], dem: Optional[np.nda
     code[has_clear & (water_votes * 2 > n_valid)] = SCL_WATER
     code[has_snow] = SCL_SNOW
     out[6] = code
-    rep.clear_fraction = float(has_clear.mean())
-    rep.snow_fraction = float(has_snow.mean())
+    rep.clear_fraction = float(has_clear[area].mean())
+    rep.snow_fraction = float(has_snow[area].mean())
     rep.sun_azimuth = float(np.mean([s[0] for s in suns]))
     rep.sun_elevation = float(np.mean([s[1] for s in suns]))
     rep.seconds = round(time.time() - t0, 1)

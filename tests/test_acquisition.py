@@ -113,3 +113,26 @@ def test_real_acquisition_gilgit(tmp_path):
     assert items
     stack, rep = build_composite(grid, items, dem, max_items=1)
     assert rep.clear_fraction > 0.5 and 300 < np.median(stack[2][stack[2] > 0]) < 4000
+
+
+def test_build_composite_covers_every_granule():
+    """A large tile overlapping two granules: the clearest scenes of one granule must not crowd out the other."""
+    grid = _grid()
+    rock = np.array([0.10, 0.14, 0.17, 0.21, 0.32, 0.33], np.float32)
+
+    def half(left):
+        refl = np.full((6, 40, 40), np.nan, np.float32)
+        scl = np.zeros((40, 40), np.uint8)
+        cols = slice(0, 20) if left else slice(20, 40)
+        refl[:, :, cols] = rock[:, None, None]
+        scl[:, cols] = 4
+        return refl, scl
+    scenes = {f"S2A_43SDA_2024080{i}_0_L2A": half(True) for i in range(1, 9)}
+    scenes.update({f"S2B_43SEA_2024080{i}_0_L2A": half(False) for i in range(1, 4)})
+    items = [S2Item(k, "2024-08-01T00:00:00Z", 1.0 if "SDA" in k else 20.0, 150, 55, [], 32643, {}) for k in scenes]
+    items.sort(key=lambda i: i.cloud_cover)          # catalog order: all SDA scenes first
+    stack, rep = build_composite(grid, items, None, max_items=6, log=lambda m: None,
+                                 reader=lambda item, g: scenes[item.id])
+    assert any("43SEA" in i for i in rep.items)
+    assert rep.clear_fraction == pytest.approx(1.0) and (stack[6] == 4).all()
+    assert len(rep.items) <= 6                          # stops once both granules are covered (2 each)

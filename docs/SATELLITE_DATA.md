@@ -1,6 +1,6 @@
 # Where the satellite imagery comes from
 
-**Short answer:** RockMap downloads all imagery itself, for free, from the European Space Agency's **Sentinel-2** satellites and the **Copernicus DEM**. You need no account, no manual downloads and no Google Earth. To get a map of the **whole of Gilgit-Baltistan** in about 40 minutes:
+**Short answer:** RockMap downloads all imagery itself, for free, from the European Space Agency's **Sentinel-2** satellites and the **Copernicus DEM**. You need no account, no manual downloads and no Google Earth. To get a map of the **whole of Gilgit-Baltistan** in under an hour:
 
 | Windows | Linux / macOS | Dashboard |
 |---|---|---|
@@ -14,6 +14,13 @@ This produces a complete, real map of the entire region with these layers:
 * landslide / rockfall susceptibility
 * gemstone prospectivity
 * snow, glacier and water
+
+![Whole Gilgit-Baltistan, true colour](images/gb_overview_rgb.jpg)
+![Whole Gilgit-Baltistan, spectral rock units](images/gb_overview_units.jpg)
+
+*This real run was made on 2026-09-28 with 2023–2025 imagery: all 15 tiles, no failures. Clear ground covered 67–99 % of each tile inside the outline, except one tile at 36 %; almost all of the rest is permanent snow and glaciers, which are mapped as their own class.*
+
+At 100 m, contacts narrower than a few pixels, such as emerald settings, cannot be resolved. Use the overview to choose areas, then map them at 20 m for gem work.
 
 For detailed work, zoom in and create **20 m regions** (the presets *Gilgit*, *Hunza*, *Skardu*, *Shigar*, … or a rectangle you draw) over the areas you care about.
 
@@ -41,7 +48,7 @@ The dashboard **does** show high-resolution satellite photos as a *background* t
 | Area | Resolution | Tiles | Time | Disk |
 |---|---|---|---|---|
 | 40 × 40 km valley (preset) | 20 m | 9 | 10–20 min | ~150 MB |
-| Whole Gilgit-Baltistan, overview | 100 m | 15 | ~40 min | ~0.5 GB |
+| Whole Gilgit-Baltistan, overview | 100 m | 15 | 30–60 min | ~0.3 GB |
 | Whole Gilgit-Baltistan, detailed | 20 m | ~190 | several hours (resumable) | ~5–8 GB |
 
 * **Offline or blocked internet?** Download Sentinel-2 L2A `.SAFE` products manually from https://dataspace.copernicus.eu (free account). Then use *Scenes → Upload*, or `rockmap stack --safe <folder>.SAFE --scl --out scene.tif`, and create a region with the source *local scenes*. Landsat 8/9 Collection 2 Level-2 (https://earthexplorer.usgs.gov) works the same way.

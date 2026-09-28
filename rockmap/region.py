@@ -273,7 +273,8 @@ class Region:
             dem = fetch_dem(tile.info, d / "dem.tif", log)
             items = catalog.search(tile.info.wgs84_bounds(), season)
             log(f"tile {tile.key}: {len(items)} candidate scenes")
-            stack, rep = build_composite(tile.info, items, dem, cfg.max_scenes, topo_correct=cfg.topo_correct, log=log)
+            stack, rep = build_composite(tile.info, items, dem, cfg.max_scenes, topo_correct=cfg.topo_correct, log=log,
+                                         aoi=inside)
             stack[:, ~inside] = 0
         write_composite(d / "stack.tif", stack, tile.info, rep)
         meta = {"composite": rep.to_dict(), "seconds": round(time.time() - t0, 1)}

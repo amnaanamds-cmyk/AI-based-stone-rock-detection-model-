@@ -2,7 +2,7 @@
 # RockMap one-command launcher (Linux / macOS)
 #   ./run.sh            install (first time), build the demo and open the dashboard
 #   ./run.sh --real     also download a real 40 x 40 km Gilgit region (needs internet)
-#   ./run.sh --gb       also map the whole of Gilgit-Baltistan at 100 m (needs internet, ~40 min)
+#   ./run.sh --gb       also map the whole of Gilgit-Baltistan at 100 m (needs internet, 30-60 min)
 #   ./run.sh serve      just start the dashboard on existing data
 set -euo pipefail
 cd "$(dirname "$0")"
