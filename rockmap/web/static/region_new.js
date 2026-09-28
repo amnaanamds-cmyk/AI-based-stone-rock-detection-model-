@@ -29,7 +29,12 @@
     info.textContent = "≈ " + Math.round(km2).toLocaleString() + " km² · roughly " + Math.max(1, Math.round(km2 / tileKm2 * 1.2)) + " tiles of " + (res * ts / 1000).toFixed(1) + " km";
   }
   var sel = document.getElementById("preset");
-  function showPreset() { show(JSON.parse(sel.selectedOptions[0].dataset.geom)); }
+  function showPreset() {
+    var o = sel.selectedOptions[0];
+    document.getElementById("preset-note").textContent = o.dataset.note || "";
+    document.getElementById("resolution").value = o.dataset.resolution || 20;
+    show(JSON.parse(o.dataset.geom));
+  }
   sel.addEventListener("change", showPreset);
   showPreset();
 

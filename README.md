@@ -22,7 +22,7 @@ Final Year Project, Department of Computer Science, Government Degree College Za
 |---|---|
 | double-click **`run.bat`** (or `run.bat --real`) | **`./run.sh`** (or `./run.sh --real`) |
 
-The first run installs everything into `.venv`, builds a fully processed demo and opens **http://127.0.0.1:5000**. Sign in as **admin / rockmap-demo**; you'll be asked to set your own password. Add `--real` to also download and analyse a real 40 × 40 km area around Gilgit city from Sentinel-2. See **[docs/RUNNING.md](docs/RUNNING.md)** for manual installation, Docker, the phone field app and troubleshooting.
+The first run installs everything into `.venv`, builds a fully processed demo and opens **http://127.0.0.1:5000**. Sign in as **admin / rockmap-demo**; you'll be asked to set your own password. Add `--gb` to map the **whole of Gilgit-Baltistan** from real Sentinel-2 imagery in about 40 minutes ([where the imagery comes from](docs/SATELLITE_DATA.md)). Add `--real` to also download and analyse a real 40 × 40 km area around Gilgit city from Sentinel-2. See **[docs/RUNNING.md](docs/RUNNING.md)** for manual installation, Docker, the phone field app and troubleshooting.
 
 ## What it does
 
@@ -80,6 +80,7 @@ The built-in Gilgit-Baltistan outline is an **approximate** processing extent (a
 * [docs/RUNNING.md](docs/RUNNING.md): **how to install and run** (one command, manual, Docker, phone app)
 * [docs/DELIVERY.md](docs/DELIVERY.md): **customer installation, acceptance checklist, operations, backups**
 * [docs/PITCH.md](docs/PITCH.md): competition pitch and 7-minute demo script
+* [docs/SATELLITE_DATA.md](docs/SATELLITE_DATA.md): **where the satellite imagery comes from** (and why not Google Earth); whole-GB map in ~40 min
 * [docs/GEMSTONES.md](docs/GEMSTONES.md): **gemstone prospectivity**: deposit models, known localities, real results, limitations
 * [docs/GILGIT_BALTISTAN.md](docs/GILGIT_BALTISTAN.md): step-by-step guide for mapping GB, data volumes and timings
 * [docs/USER_MANUAL.md](docs/USER_MANUAL.md): dashboard and command-line manual

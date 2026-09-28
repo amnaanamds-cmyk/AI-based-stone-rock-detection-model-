@@ -2,6 +2,7 @@
 REM RockMap one-command launcher (Windows)
 REM   run.bat            install (first time), build the demo and open the dashboard
 REM   run.bat --real     also download a real 40 x 40 km Gilgit region (needs internet)
+REM   run.bat --gb       also map the whole of Gilgit-Baltistan at 100 m (needs internet, ~40 min)
 REM   run.bat serve      just start the dashboard on existing data
 setlocal
 cd /d "%~dp0"

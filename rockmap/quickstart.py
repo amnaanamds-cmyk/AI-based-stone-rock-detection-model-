@@ -17,6 +17,7 @@ from typing import Callable
 import numpy as np
 
 DEMO_NAME = "Demo: synthetic Karakoram valley"
+GB_NAME = "Gilgit-Baltistan overview (real Sentinel-2, 100 m)"
 REAL_NAME = "Gilgit & surroundings (real Sentinel-2, 40 x 40 km)"
 DEMO_PASSWORD = "rockmap-demo"
 
@@ -54,7 +55,8 @@ def _run(db, root: Path, kind: str, params: dict, **cols) -> dict:
     return job
 
 
-def build_demo(root: Path, real: bool = False, progress: Callable = _noop, size: int = 512, epochs: int = 12) -> None:
+def build_demo(root: Path, real: bool = False, progress: Callable = _noop, size: int = 512, epochs: int = 12,
+               gb: bool = False) -> None:
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     fresh = not (root / "rockmap.db").exists()
@@ -69,6 +71,8 @@ def build_demo(root: Path, real: bool = False, progress: Callable = _noop, size:
         progress(1.0, "Demo region already present")
     if real and not db.one("regions", "name = ?", (REAL_NAME,)):
         _real_region(db, root, progress)
+    if gb and not db.one("regions", "name = ?", (GB_NAME,)):
+        _gb_overview(db, root, progress)
     pw = os.environ.get("ROCKMAP_ADMIN_PASSWORD") if fresh else None
     print("\n" + "=" * 68)
     print(" RockMap demo ready.  Sign in as  admin  /  " + (pw or f"your existing password (demo default: {DEMO_PASSWORD})"))
@@ -140,6 +144,18 @@ def _synthetic_region(db, root: Path, progress: Callable, size: int = 512, epoch
                                        "smoothing": 3, "n_clusters": 8, "geojson": True, "min_pixels": 25,
                                        "name": "Demo valley model (CNN + RF + SVM)"}, region_id=rid)
     progress(0.95, "Demo region complete")
+
+
+def _gb_overview(db, root: Path, progress: Callable) -> None:
+    """Whole Gilgit-Baltistan at 100 m: imagery, rock units, alteration, hazard and gem layers (~40 min)."""
+    from .presets import PRESETS
+    from .region import RegionConfig
+    progress(0.0, "Creating the whole Gilgit-Baltistan overview (downloads Sentinel-2 + Copernicus DEM, ~40 min)")
+    p = PRESETS["gilgit-baltistan-overview"]
+    cfg = RegionConfig(name=GB_NAME, aoi=p["geometry"], resolution=p["resolution"])
+    rid = _new_region(db, root, GB_NAME, cfg, "gilgit-baltistan-overview")
+    _run(db, root, "region_pipeline", {"n_clusters": 12, "geojson": False}, region_id=rid)
+    progress(1.0, "Gilgit-Baltistan overview complete")
 
 
 def _real_region(db, root: Path, progress: Callable) -> None:

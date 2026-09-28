@@ -165,7 +165,8 @@ def cmd_region_create(a):
         geom, name = load_geojson_geometry(json.loads(Path(a.aoi).read_text(encoding="utf-8"))), a.name or Path(a.aoi).stem
     else:
         sys.exit("give --preset or --aoi")
-    cfg = RegionConfig(name=name, aoi=geom, resolution=a.resolution, tile_size=a.tile_size,
+    res = a.resolution or (PRESETS[a.preset].get("resolution", 20.0) if a.preset else 20.0)
+    cfg = RegionConfig(name=name, aoi=geom, resolution=res, tile_size=a.tile_size,
                        years=a.years, months=a.months, max_cloud=a.max_cloud, max_scenes=a.max_scenes,
                        source="local" if a.local_scenes else "sentinel2", local_scenes=a.local_scenes or [],
                        local_sensor=a.local_sensor, local_dem=a.local_dem)
@@ -281,7 +282,7 @@ def cmd_quickstart(a):
     from .quickstart import build_demo
     root = Path(a.data or os.environ.get("ROCKMAP_DATA_DIR", "data"))
     os.environ["ROCKMAP_DATA_DIR"] = str(root)
-    build_demo(root, real=a.real, progress=_progress)
+    build_demo(root, real=a.real, gb=a.gb, progress=_progress)
     if a.no_serve:
         return
     a.host, a.data, a.workers, a.http_threads, a.debug = a.host, str(root), None, 8, False
@@ -423,6 +424,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--data", help="data folder (default ./data)")
     s.add_argument("--real", action="store_true",
                    help="also download a real 40 x 40 km Gilgit region from Sentinel-2 (needs internet, ~5-10 min)")
+    s.add_argument("--gb", action="store_true",
+                   help="also map the WHOLE of Gilgit-Baltistan at 100 m from Sentinel-2 (needs internet, ~40 min)")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=5000)
     s.add_argument("--no-serve", action="store_true", help="only build the demo data")
@@ -472,7 +475,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--aoi", help="GeoJSON boundary (EPSG:4326)")
     s.add_argument("--name")
     s.add_argument("--out", required=True, help="region folder")
-    s.add_argument("--resolution", type=float, default=20.0)
+    s.add_argument("--resolution", type=float, default=None, help="metres (default: 20, or the preset's own)")
     s.add_argument("--tile-size", type=int, default=1024)
     s.add_argument("--years", type=int, nargs="+", default=[2023, 2024, 2025])
     s.add_argument("--months", type=int, nargs="+", default=[7, 8, 9, 10], help="7-10 = least snow")

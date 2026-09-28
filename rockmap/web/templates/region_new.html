@@ -18,7 +18,7 @@
     <div id="aoi-preset">
       <label for="preset">Area</label>
       <select name="preset" id="preset">
-        {% for key, p in presets.items() %}<option value="{{ key }}" data-geom="{{ p.geometry|tojson|forceescape }}">{{ p.name }}</option>{% endfor %}
+        {% for key, p in presets.items() %}<option value="{{ key }}" data-geom="{{ p.geometry|tojson|forceescape }}" data-note="{{ p.note or '' }}" data-resolution="{{ p.resolution or 20 }}">{{ p.name }}</option>{% endfor %}
       </select>
       <p class="hint" id="preset-note">{{ presets['gilgit-baltistan'].note }}</p>
       <p class="hint">The Gilgit-Baltistan outline is approximate (±5–15 km). Upload the official boundary for administrative use.</p>
