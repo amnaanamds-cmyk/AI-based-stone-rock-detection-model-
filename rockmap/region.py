@@ -418,6 +418,9 @@ class Region:
         min_tiles = [k for k in self.tile_keys if (self.tile_dir(k) / "minerals.tif").exists()]
         from .minerals import MINERAL_MODELS
         products["lineaments"] = (1, [k for k in self.tile_keys if (self.tile_dir(k) / "lineaments.tif").exists()])
+        hyper_tiles = [k for k in self.tile_keys if (self.tile_dir(k) / "hyper.tif").exists()]
+        products["hyper"] = (1, hyper_tiles)
+        products["hyper_iron"] = (1, hyper_tiles)
         products["minerals"] = (1, min_tiles)
         for m in MINERAL_MODELS:
             products[f"min_{m.key}"] = (1, min_tiles)
@@ -443,7 +446,7 @@ class Region:
                     dst.write_colormap(1, class_colormap())
                 factors = [f for f in (2, 4, 8, 16, 32, 64) if max(self.width, self.height) / f >= 256]
                 if factors:
-                    rs = (Resampling.nearest if name in ("lithology", "surface", "hazard", "clusters", "lineaments")
+                    rs = (Resampling.nearest if name in ("lithology", "surface", "hazard", "clusters", "lineaments", "hyper")
                           else Resampling.average)
                     dst.build_overviews(factors, rs)
                     dst.update_tags(ns="rio_overview", resampling=rs.name)
@@ -460,6 +463,14 @@ class Region:
         if name == "lineaments":
             with rasterio.open(d / "lineaments.tif") as src:
                 return src.read(1)[None]
+        if name in ("hyper", "hyper_iron"):
+            with rasterio.open(d / "hyper.tif") as src:
+                if name == "hyper":
+                    return src.read(1)[None]
+                from .hyperspectral import MINERALS
+                keys = [m.key for m in MINERALS]
+                iron = np.maximum(src.read(2 + keys.index("hematite")), src.read(2 + keys.index("goethite")))
+                return np.where(src.read(1) > 0, np.maximum(iron, 1), 0).astype(np.uint8)[None]
         if name == "minerals" or name.startswith("min_"):
             from .minerals import MINERAL_MODELS
             band = 1 if name == "minerals" else 6 if name == "min_ml" else \
@@ -1070,6 +1081,150 @@ class Region:
         progress(1.0, "ASTER imported")
         return {"tiles": len(keys), "coverage": round(covered, 3)}
 
+    def import_hyperspectral(self, paths: Sequence[str | Path], wavelengths: Optional[Sequence[float]] = None,
+                             library: Optional[bytes] = None, progress: Progress = _noop, log: Log = print) -> dict:
+        """Map alteration minerals in hyperspectral scenes (EnMAP, PRISMA, ...) and store them per tile
+        (``tiles/*/hyper.tif``: band 1 dominant SWIR mineral code+1, bands 2-9 band depth x1000, clipped
+        to 255). The copper and iron models then use them wherever the scenes reach."""
+        from .hyperspectral import MINERALS, map_scene, parse_library
+        lib = parse_library(library) if library else None
+        folder = self.folder / "hyperspectral"
+        folder.mkdir(exist_ok=True)
+        products, summaries = [], []
+        for i, p in enumerate(paths):
+            progress(0.6 * i / len(paths), f"Hyperspectral mineral mapping: {Path(p).name}")
+            out = folder / f"{Path(p).stem}_minerals.tif"
+            s = map_scene(p, out, wavelengths, lib)
+            log(f"{Path(p).name}: {s['wavelengths']} bands {s['range_nm'][0]}-{s['range_nm'][1]} nm; "
+                + ", ".join(f"{k} {v}" for k, v in s["pixels"].items() if v))
+            products.append(out)
+            summaries.append(dict(s, file=Path(p).name))
+        keys = [k for k in self.tile_keys if self.state()["tiles"].get(k, {}).get("acquired")]
+        px_km2 = (self.config.resolution / 1000) ** 2
+        area = {m.key: 0.0 for m in MINERALS}
+        covered = 0.0
+        for i, key in enumerate(keys):
+            progress(0.6 + 0.4 * i / len(keys), f"Hyperspectral minerals to tiles: tile {key}")
+            t = self.tile(key)
+            data = read_local_to_grid([str(p) for p in products], t.info, 1 + len(MINERALS), Resampling.nearest)
+            inside = self.aoi_mask(t.info) & np.isfinite(data[0])
+            out = np.zeros((1 + len(MINERALS), t.info.height, t.info.width), np.uint8)
+            out[0] = np.where(inside, np.nan_to_num(data[0]), 0).astype(np.uint8)
+            for j, m in enumerate(MINERALS, start=1):
+                d = np.where(inside, np.nan_to_num(data[j]), 0)
+                out[j] = np.clip(d, 0, 255).astype(np.uint8)
+                area[m.key] += float((d >= 30).sum()) * px_km2
+            covered += float(inside.sum()) * px_km2
+            path = self.tile_dir(key) / "hyper.tif"
+            if inside.any():
+                write_raster(path, out, t.info, nodata=0, descriptions=["mineral_code_plus1"] +
+                             [f"{m.key}_depth_x1000" for m in MINERALS])
+            elif path.exists():
+                path.unlink()
+        info = {"scenes": summaries, "covered_km2": round(covered, 2),
+                "mineral_km2": {k: round(v, 3) for k, v in area.items()},
+                "library": summaries[0]["library"] if summaries else [],
+                "created": time.strftime("%Y-%m-%d %H:%M:%S")}
+        (self.folder / "products").mkdir(exist_ok=True)
+        (self.folder / "products" / "hyperspectral.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
+        progress(1.0, "Hyperspectral minerals imported")
+        return info
+
+    def hyperspectral(self) -> Optional[dict]:
+        p = self.folder / "products" / "hyperspectral.json"
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+
+    def _hyper(self, key: str, window_shape, sl) -> Optional[dict]:
+        """Hyperspectral clay / iron-oxide depths (0-1, NaN outside scene coverage) on the halo window."""
+        p = self.tile_dir(key) / "hyper.tif"
+        if not p.exists():
+            return None
+        from .hyperspectral import CLAY_KEYS, IRON_KEYS, MINERALS
+        keys = [m.key for m in MINERALS]
+        with rasterio.open(p) as src:
+            data = src.read().astype(np.float32)
+        cover = np.zeros(window_shape, bool)
+        cover[sl] = data[0] > 0
+        out = {}
+        for name, group in (("hyper_clay", CLAY_KEYS), ("hyper_iron", IRON_KEYS)):
+            v = np.full(window_shape, np.nan, np.float32)
+            v[sl] = np.max([data[1 + keys.index(k)] for k in group], axis=0) / 1000.0
+            out[name] = np.where(cover, v, np.nan)
+        return out
+
+    def export_geopackage(self, out_path: Optional[Path] = None, extra: Optional[dict] = None) -> Path:
+        """All vector products of the region in one GeoPackage (opens in ArcGIS Pro and QGIS)."""
+        from .gpkg import write_geopackage
+        prod = self.folder / "products"
+        prod.mkdir(exist_ok=True)
+
+        def load(name):
+            p = prod / name
+            return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+
+        def points(occ, kind):
+            return {"type": "FeatureCollection", "features": [
+                {"type": "Feature", "geometry": {"type": "Point", "coordinates": [o["lon"], o["lat"]]},
+                 "properties": {k: o.get(k) for k in (kind, "name", "model", "source")}} for o in occ]}
+
+        layers = {
+            "area_of_interest": {"type": "FeatureCollection", "features": [
+                {"type": "Feature", "geometry": self.config.aoi, "properties": {"name": self.config.name}}]},
+            "lithology": load("lithology.geojson"),
+            "alteration_targets": load("targets.geojson"),
+            "mineral_targets": load("mineral_targets.geojson"),
+            "gem_targets": load("gem_targets.geojson"),
+            "lineaments": load("lineaments.geojson"),
+            "mineral_occurrences": points(self.mineral_occurrences(), "commodity"),
+            "gem_occurrences": points(self.gem_occurrences(), "gem"),
+        }
+        layers.update(extra or {})
+        return write_geopackage(out_path or prod / "rockmap.gpkg", layers)
+
+    def import_vhr(self, path: str | Path, bands: Optional[Sequence[int]] = None, progress: Progress = _noop) -> dict:
+        """Very-high-resolution imagery (WorldView-3, Pleiades, SuperView...) as a map layer for vein and
+        outcrop interpretation. Kept at its native resolution, reprojected to the region CRS, stretched
+        to 8-bit RGB with overviews (``mosaic/vhr.tif``)."""
+        from rasterio.vrt import WarpedVRT
+        out = self.folder / "mosaic"
+        out.mkdir(exist_ok=True)
+        tmp = out / "vhr.building.tif"
+        with rasterio.open(path) as src:
+            if bands is None:     # WorldView-3 MS: 8 bands (coastal..NIR2) -> red 5, green 3, blue 2
+                bands = (5, 3, 2) if src.count >= 8 else (3, 2, 1) if src.count == 4 else \
+                    (1, 2, 3) if src.count >= 3 else (1, 1, 1)
+            with WarpedVRT(src, crs=self.crs, resampling=Resampling.bilinear, nodata=0,
+                           src_nodata=src.nodata if src.nodata is not None else 0) as vrt:
+                step = max(1, max(vrt.width, vrt.height) // 1500)
+                sample = vrt.read(list(bands), out_shape=(3, max(1, vrt.height // step), max(1, vrt.width // step)),
+                                  masked=True).astype(np.float64)
+                lo = [float(np.percentile(b.compressed(), 2)) if b.count() else 0.0 for b in sample]
+                hi = [float(np.percentile(b.compressed(), 98)) if b.count() else 1.0 for b in sample]
+                prof = dict(driver="GTiff", width=vrt.width, height=vrt.height, count=3, dtype="uint8",
+                            crs=self.crs, transform=vrt.transform, nodata=0, photometric="RGB", compress="deflate",
+                            tiled=True, blockxsize=512, blockysize=512, BIGTIFF="IF_SAFER")
+                with rasterio.open(tmp, "w", **prof) as dst:
+                    rows = list(range(0, vrt.height, 2048))
+                    for i, row in enumerate(rows):
+                        progress(0.9 * i / len(rows), "Very-high-resolution imagery")
+                        win = Window(0, row, vrt.width, min(2048, vrt.height - row))
+                        data = vrt.read(list(bands), window=win, masked=True).astype(np.float32)
+                        rgb = np.stack([np.clip((b - lo[j]) / max(hi[j] - lo[j], 1e-6) * 254 + 1, 1, 255)
+                                        for j, b in enumerate(data.filled(np.nan))])
+                        rgb = np.where(np.isfinite(rgb) & ~np.ma.getmaskarray(data).any(axis=0), rgb, 0)
+                        dst.write(rgb.astype(np.uint8), window=win)
+                    factors = [f for f in (2, 4, 8, 16, 32, 64, 128, 256) if max(vrt.width, vrt.height) / f >= 256]
+                    if factors:
+                        dst.build_overviews(factors, Resampling.average)
+                res = abs(vrt.transform.a)
+        from .tiles import release
+        final = out / "vhr.tif"
+        release(final)
+        replace_file(tmp, final)
+        self._set(vhr=Path(path).name, vhr_resolution_m=round(res, 3), mosaic_version=int(time.time()))
+        progress(1.0, "Very-high-resolution imagery ready")
+        return {"file": Path(path).name, "resolution_m": round(res, 3), "bands": list(bands)}
+
     def _aster_qi(self, key: str, window_shape, sl) -> Optional[np.ndarray]:
         p = self.tile_dir(key) / "aster_qi.tif"
         if not p.exists():
@@ -1096,6 +1251,10 @@ class Region:
             lin, strike = np.zeros(usable.shape, bool), np.full(usable.shape, np.nan, np.float32)
         dens = lineament_density(lin, px)
         raw = raw_evidence(scene.reflectance, dens, self._aster_qi(key, usable.shape, sl))
+        hyper = self._hyper(key, usable.shape, sl)
+        shape = usable.shape
+        raw["hyper_clay"] = hyper["hyper_clay"] if hyper else np.full(shape, np.nan, np.float32)
+        raw["hyper_iron"] = hyper["hyper_iron"] if hyper else np.full(shape, np.nan, np.float32)
         return t, scene, sl, usable, lin, strike, dens, raw
 
     def mineral_analysis(self, occurrences: Optional[list[dict]] = None, progress: Progress = _noop,
@@ -1236,7 +1395,9 @@ class Region:
                       "setting": m.setting, "high_km2": round(high[mi], 2), "target_cutoff": round(cutoffs[m.key], 1),
                       "targets": sum(1 for x in targets if x["model"] == m.key), "validation": validation[m.key]}
                      for mi, m in enumerate(MINERAL_MODELS, start=1)]
+        hyper = any((self.tile_dir(k) / "hyper.tif").exists() for k in keys)
         result = {"created": time.strftime("%Y-%m-%d %H:%M:%S"), "stats": stats.to_dict(), "aster": aster,
+                  "hyperspectral": hyper,
                   "models": per_model, "high_km2": round(high[0], 2), "targets_total": len(targets),
                   "targets_top": targets[:30], "occurrences": len(occurrences), "occurrences_inside": inside,
                   "validation": validation, "ml": ml,

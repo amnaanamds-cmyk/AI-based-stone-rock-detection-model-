@@ -35,6 +35,7 @@ The first run installs everything into `.venv`, builds a fully processed demo an
 | **Mineral prospectivity** *(new)* | Region-wide anomalies in clay, iron-oxide and ferrous band ratios are mapped, then turned into a **ranked list of exploration targets** with coordinates. Download as CSV or GeoJSON, or view on the map. |
 | **Gemstone prospectivity** *(new in 2.3)* | Ranked target zones for **ruby & spinel (marble), aquamarine / topaz / tourmaline (pegmatite), emerald (contacts) and peridot / nephrite (ultramafic)**. Validated against known localities (AUC), with an optional Random Forest trained on them. Field finds count as localities. See [docs/GEMSTONES.md](docs/GEMSTONES.md). |
 | **Structures & mineral prospectivity** *(new in 2.5)* | Automatic **lineament extraction** (faults and fractures, with rose diagram and density map), plus ranked targets for **iron, copper and quartz-vein antimony / gold**. Optional **ASTER thermal Quartz Index**. Validation with known occurrences, and a Random Forest model once 8 or more are known. See [docs/MINERALS.md](docs/MINERALS.md). |
+| **Hyperspectral, VHR imagery & GeoPackage** *(new in 2.6)* | Maps alteration minerals (alunite, kaolinite, sericite, chlorite, calcite, jarosite, hematite, goethite) from **EnMAP / PRISMA** hyperspectral scenes, with optional Spectral Angle Mapper matching against your spectral library. Shows **WorldView-3 / Pleiades** imagery as a base map for vein mapping. Delivers **one GeoPackage** with every vector product for ArcGIS Pro and QGIS. |
 | **Landslide / rockfall susceptibility** *(new)* | A five-class hazard map built from slope, relief, river undercutting, rock strength and bare ground, with km² per class. |
 | **Rock map without training data** *(new)* | The area is grouped into spectral units automatically. A geologist names them, and they become a lithology map in one click. |
 | **Field app** *(new)* | A phone page that works offline: GPS, photo, rock type and certainty. Observations become training data and **validate the map** by measuring agreement. |
@@ -104,7 +105,7 @@ The built-in Gilgit-Baltistan outline is an **approximate** processing extent (a
 
 ## Tests
 ```bash
-pytest                                  # 75 tests incl. a crawl of every page; CI runs them on Windows, macOS and Linux
+pytest                                  # 81 tests incl. a crawl of every page; CI runs them on Windows, macOS and Linux
 rockmap doctor                          # installation self-check
 ROCKMAP_NETWORK_TESTS=1 pytest          # plus a live download of Sentinel-2 + DEM near Gilgit
 ```

@@ -23,7 +23,7 @@ from .jobs import handler
 bp = Blueprint("regions", __name__)
 LAYERS = ("rgb", "falsecolor", "hillshade", "surface", "lithology", "confidence", "alteration", "hazard", "clusters",
           "gems", "gem_marble", "gem_pegmatite", "gem_contact", "gem_ultramafic", "gem_ml",
-          "minerals", "min_iron", "min_copper", "min_vein", "min_ml", "lineaments")
+          "minerals", "min_iron", "min_copper", "min_vein", "min_ml", "lineaments", "hyper", "hyper_iron", "vhr")
 STAGES = {"acquire": "region_acquire", "analyze": "region_analyze", "gems": "region_gems",
           "minerals": "region_minerals", "train": "region_train",
           "classify": "region_classify", "products": "region_products", "pipeline": "region_pipeline"}
@@ -134,6 +134,8 @@ def _do_products(ctx, region: Region, a=0.0, b=1.0):
     region_report(region, out / "report.pdf", load_meta(model) if model else None, stats,
                   os.environ.get("ROCKMAP_ORGANISATION", ""), analytics=region.analytics(), validation=validation,
                   gems=region.gems(), minerals=region.minerals())
+    ctx.progress(a + (b - a) * 0.97, "Writing GeoPackage")
+    region.export_geopackage(extra={"field_observations": observations_layer(ctx.db, ctx.job["region_id"])})
 
 
 def _region_for(ctx) -> Region:
@@ -182,6 +184,18 @@ def _do_gems(ctx, region: Region, a=0.0, b=1.0):
     region.gem_analysis(occ, _scaled(ctx, a, b), ctx.log)
 
 
+def observations_layer(db: Database, region_id: int) -> dict:
+    """Field observations of a region as a GeoJSON layer (for the GeoPackage)."""
+    from ..config import ALL_CLASSES
+    return {"type": "FeatureCollection", "features": [
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [o["lon"], o["lat"]]},
+         "properties": {"id": o["id"], "rock": ALL_CLASSES[o["class_id"]].name if o["class_id"] in ALL_CLASSES else
+                        str(o["class_id"]), "certainty": o["certainty"], "gem": o.get("gem"),
+                        "commodity": o.get("commodity"), "note": o["note"], "author": o["author"],
+                        "observed_at": o["observed_at"] or o["created"]}}
+        for o in db.all("observations", "region_id = ?", (region_id,))]}
+
+
 def mineral_occurrences(db: Database, region: Region, region_id: int) -> list[dict]:
     """Known mineral occurrences: uploaded lists + field-app observations that name a commodity."""
     from ..minerals import COMMODITY_TYPES
@@ -214,6 +228,24 @@ def job_region_aster(ctx):
     ctx.log(f"ASTER Quartz Index imported: {res['coverage'] * 100:.0f} % of the region covered")
     _do_minerals(ctx, region, 0.3, 0.9)
     region.build_mosaics(_scaled(ctx, 0.9, 1.0))
+
+
+@handler("region_hyperspectral")
+def job_region_hyperspectral(ctx):
+    region = _region_for(ctx)
+    lib = Path(ctx.params["library"]).read_bytes() if ctx.params.get("library") else None
+    info = region.import_hyperspectral(ctx.params["paths"], ctx.params.get("wavelengths"), lib,
+                                       _scaled(ctx, 0.0, 0.5), ctx.log)
+    ctx.log(f"hyperspectral coverage: {info['covered_km2']:.1f} km2 of the region")
+    _do_minerals(ctx, region, 0.5, 0.9)
+    region.build_mosaics(_scaled(ctx, 0.9, 1.0))
+
+
+@handler("region_vhr")
+def job_region_vhr(ctx):
+    region = _region_for(ctx)
+    info = region.import_vhr(ctx.params["path"], progress=_scaled(ctx, 0.0, 1.0))
+    ctx.log(f"very-high-resolution layer ready: {info['resolution_m']} m pixels, bands {info['bands']}")
 
 
 @handler("region_gems")
@@ -350,12 +382,14 @@ def region_page(region_id):
     from ..gems import GEM_MODELS, GEM_NAMES
     gems = region.gems()
     products.update({n: (region.folder / "products" / n).exists() for n in ("gem_targets.csv", "gem_targets.geojson")})
+    from ..hyperspectral import MINERALS as HYPER_MINERALS
     from ..minerals import COMMODITY_NAMES, MINERAL_MODELS
     minerals = region.minerals()
     products.update({n: (region.folder / "products" / n).exists()
                      for n in ("mineral_targets.csv", "mineral_targets.geojson", "lineaments.geojson")})
     return render_template("region.html", gems=gems, gem_models=GEM_MODELS, gem_names=GEM_NAMES,
                            minerals=minerals, mineral_models=MINERAL_MODELS, commodity_names=COMMODITY_NAMES,
+                           hyper=region.hyperspectral(), hyper_minerals=HYPER_MINERALS,
                            min_occ=mineral_occurrences(db, region, region_id),
                            gem_occ=gem_occurrences(db, region, region_id), row=row, region=region, cfg=region.config, summary=region.summary(),
                            state=st, jobs=jobs, active=active, counts=counts, refs=refs, layers=layers,
@@ -833,6 +867,77 @@ def region_aster(region_id):
     audit("minerals.aster.upload", f"{region_id}: {len(paths)} files")
     flash(f"{len(paths)} ASTER file(s) uploaded; Quartz Index and mineral maps are being computed.", "ok")
     return redirect(url_for("regions.region_page", region_id=region_id, job=jid))
+
+
+@bp.post("/regions/<int:region_id>/hyperspectral")
+@requires("analyst")
+def region_hyperspectral(region_id):
+    """Upload hyperspectral scene(s) (GeoTIFF reflectance) + optional wavelengths (.hdr/.txt) and
+    spectral library (.csv) -> alteration mineral maps -> copper / iron models recomputed."""
+    from ..hyperspectral import parse_wavelengths
+    region = _region(_region_row(region_id))
+    back = redirect(url_for("regions.region_page", region_id=region_id))
+    scenes = [f for f in request.files.getlist("scenes") if f and f.filename]
+    if not scenes:
+        flash("Choose one or more hyperspectral GeoTIFFs (EnMAP / PRISMA surface reflectance).", "error")
+        return back
+    folder = region.folder / "hyperspectral" / "input"
+    folder.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for f in scenes:
+        name = secure_filename(f.filename) or "scene.tif"
+        if not name.lower().endswith((".tif", ".tiff")):
+            flash(f"{name}: only GeoTIFF is accepted (export EnMAP / PRISMA to GeoTIFF first).", "error")
+            return back
+        f.save(folder / name)
+        paths.append(str(folder / name))
+    params: dict = {"paths": paths}
+    wl = request.files.get("wavelengths")
+    if wl and wl.filename:
+        try:
+            params["wavelengths"] = [float(v) for v in parse_wavelengths(wl.read().decode("utf-8", "ignore"))]
+        except ValueError as e:
+            flash(f"Wavelengths rejected: {e}", "error")
+            return back
+    lib = request.files.get("library")
+    if lib and lib.filename:
+        lp = folder / (secure_filename(lib.filename) or "library.csv")
+        lib.save(lp)
+        params["library"] = str(lp)
+    jid = current_app.extensions["rockmap_submit"]("region_hyperspectral", params, region_id=region_id)
+    audit("minerals.hyperspectral.upload", f"{region_id}: {len(paths)} scenes")
+    flash(f"{len(paths)} hyperspectral scene(s) uploaded; mineral maps are being computed.", "ok")
+    return redirect(url_for("regions.region_page", region_id=region_id, job=jid))
+
+
+@bp.post("/regions/<int:region_id>/vhr")
+@requires("analyst")
+def region_vhr(region_id):
+    """Upload very-high-resolution imagery (GeoTIFF) as a map layer."""
+    region = _region(_region_row(region_id))
+    f = request.files.get("file")
+    if not f or not f.filename or not f.filename.lower().endswith((".tif", ".tiff")):
+        flash("Choose a GeoTIFF (WorldView-3, Pleiades, SuperView ... ortho-image).", "error")
+        return redirect(url_for("regions.region_page", region_id=region_id))
+    folder = region.folder / "vhr"
+    folder.mkdir(exist_ok=True)
+    path = folder / (secure_filename(f.filename) or "vhr.tif")
+    f.save(path)
+    jid = current_app.extensions["rockmap_submit"]("region_vhr", {"path": str(path)}, region_id=region_id)
+    audit("vhr.upload", f"{region_id}: {path.name}")
+    flash("Imagery uploaded; the map layer is being prepared.", "ok")
+    return redirect(url_for("regions.region_page", region_id=region_id, job=jid))
+
+
+@bp.route("/regions/<int:region_id>/rockmap.gpkg")
+@requires("viewer")
+def region_geopackage(region_id):
+    """All vector products as one GeoPackage (rebuilt on request so it is always current)."""
+    row = _region_row(region_id)
+    region = _region(row)
+    p = region.export_geopackage(extra={"field_observations": observations_layer(_db(), region_id)})
+    return Response(p.read_bytes(), mimetype="application/geopackage+sqlite3",
+                    headers={"Content-Disposition": f"attachment; filename=region{region_id}.gpkg"})
 
 
 @bp.route("/regions/<int:region_id>/mineral_targets.<fmt>")

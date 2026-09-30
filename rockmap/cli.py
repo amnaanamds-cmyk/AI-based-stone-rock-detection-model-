@@ -276,6 +276,29 @@ def cmd_region_minerals(a):
     r.build_mosaics()
 
 
+def cmd_region_hyperspectral(a):
+    from .hyperspectral import parse_wavelengths
+    r = _region(a)
+    wl = parse_wavelengths(Path(a.wavelengths).read_text(encoding="utf-8", errors="ignore")) if a.wavelengths else None
+    lib = Path(a.library).read_bytes() if a.library else None
+    info = r.import_hyperspectral(a.scenes, wl, lib, _progress)
+    print(f"\ncovered {info['covered_km2']:.1f} km2")
+    for k, v in info["mineral_km2"].items():
+        print(f"  {k:10s} {v:8.2f} km2")
+    r.mineral_analysis(None, _progress)
+    r.build_mosaics()
+
+
+def cmd_region_vhr(a):
+    print(_region(a).import_vhr(a.image, a.bands, _progress))
+
+
+def cmd_region_geopackage(a):
+    from .gpkg import layer_names
+    p = _region(a).export_geopackage(Path(a.out) if a.out else None)
+    print(f"{p}: layers {', '.join(layer_names(p))}")
+
+
 def cmd_region_gems(a):
     from .gems import parse_occurrences
     r = _region(a)
@@ -543,6 +566,16 @@ def build_parser() -> argparse.ArgumentParser:
     s = rarg("minerals", "structural lineaments + iron / copper / quartz-vein prospectivity", cmd_region_minerals)
     s.add_argument("--occurrences", help="known mineral occurrences: CSV (lat,lon,commodity,name) or GeoJSON points")
     s.add_argument("--aster", nargs="+", help="ASTER emissivity GeoTIFF(s), bands 10-14 (adds the thermal Quartz Index)")
+    s = rarg("hyperspectral", "alteration minerals from EnMAP / PRISMA scenes (then re-runs minerals)",
+             cmd_region_hyperspectral)
+    s.add_argument("scenes", nargs="+", help="hyperspectral reflectance GeoTIFF(s)")
+    s.add_argument("--wavelengths", help="ENVI .hdr or text file with band wavelengths (if not in the GeoTIFF)")
+    s.add_argument("--library", help="spectral library CSV (wavelength + one column per mineral) for SAM")
+    s = rarg("vhr", "add very-high-resolution imagery (WorldView-3 ...) as a map layer", cmd_region_vhr)
+    s.add_argument("image", help="ortho-image GeoTIFF")
+    s.add_argument("--bands", type=int, nargs=3, help="red green blue band numbers (default: by band count)")
+    s = rarg("geopackage", "export all vector products to one GeoPackage (ArcGIS Pro / QGIS)", cmd_region_geopackage)
+    s.add_argument("--out", help="output .gpkg (default: <region>/products/rockmap.gpkg)")
     s = rarg("label-units", "turn spectral units into a lithology map", cmd_region_label_units)
     s.add_argument("assign", nargs="+", help="UNIT=CLASS pairs, e.g. 1=4 2=7 3=6")
     s = rarg("mosaic", "build region-wide GeoTIFF mosaics with overviews", cmd_region_mosaic)

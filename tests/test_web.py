@@ -337,3 +337,47 @@ def test_mineral_workflow_in_dashboard(client, app, small_scene, tmp_path):
     assert "ASTER in use" in client.get(f"/regions/{rid}").get_data(as_text=True)
     field = client.get("/field/").get_data(as_text=True)
     assert "antimony" in field.lower()
+
+
+def test_hyperspectral_vhr_and_geopackage(client, app, small_scene, tmp_path):
+    import numpy as np
+    import rasterio
+    from rockmap.gpkg import layer_names
+    from rockmap.io import read_raster
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("hs_helpers", Path(__file__).with_name("test_hyperspectral.py"))
+    hs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hs)
+    WL, _cube_like = hs.WL, hs._cube_like
+    rid, _ = _local_region(client, small_scene)
+    client.post(f"/regions/{rid}/run", data={"stage": "acquire"})
+    _, info = read_raster(small_scene["scene"])
+    cube = _cube_like(info, tmp_path / "enmap.tif", lambda r: "alunite" if r % 2 else "chlorite")
+    hdr = "wavelength = {" + ", ".join(f"{w:.1f}" for w in WL) + "}"
+    r = client.post(f"/regions/{rid}/hyperspectral",
+                    data={"scenes": (io.BytesIO(cube.read_bytes()), "enmap.tif"),
+                          "wavelengths": (io.BytesIO(hdr.encode()), "enmap.hdr")},
+                    content_type="multipart/form-data", follow_redirects=True)
+    assert b"hyperspectral scene(s) uploaded" in r.data
+    page = client.get(f"/regions/{rid}").get_data(as_text=True)
+    assert "Hyperspectral alteration minerals" in page and "Alunite" in page
+    assert client.get(f"/tiles/{rid}/hyper/12/0/0.png").status_code == 200
+
+    # very-high-resolution imagery: 4-band (B, G, R, NIR) 2 m image over the region
+    vhr = tmp_path / "vhr.tif"
+    t = info.transform
+    with rasterio.open(vhr, "w", driver="GTiff", width=200, height=200, count=4, dtype="uint16", crs=info.crs,
+                       transform=rasterio.transform.from_origin(t.c, t.f, 2.0, 2.0)) as dst:
+        dst.write(np.random.default_rng(0).integers(200, 3000, (4, 200, 200)).astype(np.uint16))
+    r = client.post(f"/regions/{rid}/vhr", data={"file": (io.BytesIO(vhr.read_bytes()), "wv3.tif")},
+                    content_type="multipart/form-data", follow_redirects=True)
+    assert b"Imagery uploaded" in r.data
+    assert "current: wv3.tif" in client.get(f"/regions/{rid}").get_data(as_text=True)
+    assert client.get(f"/tiles/{rid}/vhr/15/0/0.png").status_code == 200
+
+    r = client.get(f"/regions/{rid}/rockmap.gpkg")
+    assert r.status_code == 200 and r.data[:15] == b"SQLite format 3"
+    p = tmp_path / "out.gpkg"
+    p.write_bytes(r.data)
+    assert "area_of_interest" in layer_names(p)

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.6.0: hyperspectral, VHR imagery, GeoPackage
+- Hyperspectral mineral mapping (EnMAP, PRISMA, ...) by diagnostic absorption features: alunite, kaolinite, sericite, chlorite, calcite, jarosite, hematite and goethite. Optional Spectral Angle Mapper against a user spectral library. Processing is block-wise, and the copper and iron models use the results where scenes exist.
+- Very-high-resolution imagery (WorldView-3, Pleiades, SuperView) as a base map at native resolution (up to zoom 19).
+- GeoPackage export of all vector products (pure Python, no GDAL needed), from the dashboard, the CLI and every products run.
+- New CLI commands: `region hyperspectral`, `region vhr`, `region geopackage`.
+
 ## 2.5.0: structures & mineral prospectivity
 - Automatic structural lineaments from the DEM (four-direction hillshade edges plus straightness filter), exported as GeoJSON lines, a density map and a rose diagram.
 - Prospectivity models for iron oxide / iron ore, copper alteration (porphyry / vein) and quartz veins (antimony, gold), with ranked target zones as CSV / GeoJSON, map layers and a PDF page.

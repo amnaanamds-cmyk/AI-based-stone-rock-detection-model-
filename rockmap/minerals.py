@@ -80,7 +80,12 @@ MINERAL_MODELS: tuple[MineralModel, ...] = (
 )
 MODEL_BY_KEY = {m.key: m for m in MINERAL_MODELS}
 VEIN_WEIGHTS_WITH_ASTER = {"lineament": 0.25, "proximity": 0.20, "silica": 0.10, "quartz_index": 0.45}
-EVIDENCE = ("clay", "iron_oxide", "gossan", "brightness", "lineament", "quartz_index")
+EVIDENCE = ("clay", "iron_oxide", "gossan", "brightness", "lineament", "quartz_index", "hyper_clay", "hyper_iron")
+# where hyperspectral mineral maps exist, they replace most of the broad Sentinel-2 ratios
+HYPER_WEIGHTS = {
+    "iron": {"hyper_iron": 0.40, "iron_oxide": 0.25, "gossan": 0.20, "lineament": 0.15},
+    "copper": {"hyper_clay": 0.40, "clay": 0.10, "iron_oxide": 0.15, "lineament": 0.25, "gossan": 0.10},
+}
 FEATURE_KEYS = ("clay", "iron_oxide", "gossan", "silica", "lineament", "proximity")
 TARGET_THRESHOLD = 75
 TARGET_PERCENTILE = 99.0
@@ -251,8 +256,14 @@ def evidence_layers(raw: dict, usable: np.ndarray, stats: MineralStats, lin_mask
     }
     if "quartz_index" in z:
         ev["quartz_index"] = _pos(z["quartz_index"])
+    for k in ("hyper_clay", "hyper_iron"):
+        if k in raw and np.isfinite(raw[k]).any():
+            # absolute band depth: 0.02 = trace, 0.12 or deeper = strong (membership 1)
+            ev[k] = np.clip((np.nan_to_num(raw[k]) - 0.02) / 0.10, 0, 1)
+            ev["hyper_cover"] = np.isfinite(raw[k]) | ev.get("hyper_cover", False)
     for k in ev:
-        ev[k] = np.where(usable, ev[k], 0).astype(np.float32)
+        if k != "hyper_cover":
+            ev[k] = np.where(usable, ev[k], 0).astype(np.float32)
     return ev
 
 
@@ -262,6 +273,10 @@ def model_scores(ev: dict[str, np.ndarray]) -> np.ndarray:
     for m in MINERAL_MODELS:
         w = VEIN_WEIGHTS_WITH_ASTER if m.key == "vein" and "quartz_index" in ev else m.weights
         s = sum(wt * ev[k] for k, wt in w.items()) / sum(w.values())
+        hw = HYPER_WEIGHTS.get(m.key)
+        if hw and all(k in ev for k in hw) and "hyper_cover" in ev:
+            s_h = sum(wt * ev[k] for k, wt in hw.items()) / sum(hw.values())
+            s = np.where(ev["hyper_cover"], s_h, s)
         if m.key == "vein":   # structures alone are everywhere in the Karakoram: require the host rock too
             host = ev["quartz_index"] if "quartz_index" in ev else ev["silica"]
             s = s * np.clip(0.4 + host, 0, 1)

@@ -29,6 +29,8 @@
   ["rgb", "falsecolor", "hillshade"].forEach(function (l) {
     if (available.indexOf(l) >= 0) bases[labels[l]] = L.tileLayer(tileUrl(l), { maxZoom: 17, maxNativeZoom: 16, attribution: "Contains modified Copernicus Sentinel data" });
   });
+  if (available.indexOf("vhr") >= 0)
+    bases["Very-high-resolution imagery (uploaded)"] = L.tileLayer(tileUrl("vhr"), { maxZoom: 20, maxNativeZoom: 19 });
   var baseDefault = available.indexOf("rgb") >= 0 ? bases[labels.rgb] : bases["OpenStreetMap"];
   baseDefault.addTo(map);
 
@@ -47,7 +49,8 @@
     gem_contact: "Gem - emerald & beryl (contacts)", gem_ultramafic: "Gem - peridot & nephrite (ultramafic)", gem_ml: "Gem - data-driven (known localities)",
     minerals: "Minerals (best model)", min_iron: "Minerals - iron oxide / iron ore", min_copper: "Minerals - copper alteration",
     min_vein: "Minerals - quartz veins (antimony, gold)", min_ml: "Minerals - data-driven (known occurrences)",
-    lineaments: "Lineament pixels (raster)" };
+    lineaments: "Lineament pixels (raster)", hyper: "Hyperspectral minerals (alteration)",
+    hyper_iron: "Hyperspectral iron oxides (hematite / goethite)" };
   Object.keys(extra).forEach(function (l) {
     if (available.indexOf(l) >= 0) overlays[extra[l]] = L.tileLayer(tileUrl(l), { maxZoom: 17, maxNativeZoom: 16, opacity: l === "clusters" ? 0.75 : 0.85 });
   });

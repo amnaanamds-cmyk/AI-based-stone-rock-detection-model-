@@ -79,7 +79,8 @@ def _pick_level(path: Path, tile_px_m: float) -> int:
 
 def render_tile(mosaic: Path, layer: str, z: int, x: int, y: int) -> bytes:
     """PNG bytes of one XYZ tile of a region mosaic (transparent outside data)."""
-    categorical = layer in ("lithology", "surface", "hazard", "clusters", "alteration", "lineaments") or \
+    categorical = layer in ("lithology", "surface", "hazard", "clusters", "alteration", "lineaments", "hyper",
+                           "hyper_iron") or \
         layer.startswith(("gem", "min"))
     rs = Resampling.nearest if categorical else Resampling.bilinear
     left, bottom, right, top = tile_bounds(z, x, y)
@@ -97,6 +98,20 @@ def render_tile(mosaic: Path, layer: str, z: int, x: int, y: int) -> bytes:
             data = vrt.read()
     if layer.startswith("gem") or layer.startswith("min"):
         rgba = _gem_rgba(layer, data[0])
+    elif layer == "hyper":
+        from .hyperspectral import MINERALS
+        rgba = np.zeros((TILE, TILE, 4), np.uint8)
+        for i, m in enumerate(MINERALS, start=2):         # code+1: 1 = measured but no SWIR mineral
+            c = m.color.lstrip("#")
+            rgba[data[0] == i] = (int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16), 235)
+    elif layer == "hyper_iron":
+        d = data[0].astype(np.float32)
+        t = np.clip((d - 30) / 120, 0, 1)
+        rgba = np.zeros((TILE, TILE, 4), np.uint8)
+        rgba[..., 0] = (200 + 40 * t).astype(np.uint8)
+        rgba[..., 1] = (120 * (1 - t) + 30 * t).astype(np.uint8)
+        rgba[..., 2] = 20
+        rgba[..., 3] = np.where(d >= 30, 110 + 145 * t, 0).astype(np.uint8)
     elif layer == "lineaments":
         rgba = np.zeros((TILE, TILE, 4), np.uint8)
         rgba[data[0] > 0] = (20, 20, 20, 230)       # strike-coded pixels drawn as dark lines

@@ -120,6 +120,22 @@
           <p class="hint">Adds the thermal Quartz Index (quartz is invisible to Sentinel-2). Free from NASA Earthdata Search after registration; see docs/MINERALS.md.{% if minerals and minerals.aster %} <b>ASTER in use.</b>{% endif %}</p>
           <button class="btn small ghost">Upload ASTER &amp; recompute</button>
         </form>
+        <form method="post" enctype="multipart/form-data" action="{{ url_for('regions.region_hyperspectral', region_id=row.id) }}" style="margin-top: 8px">{{ csrf_field() }}
+          <label for="hyper-scenes">Optional: hyperspectral scenes (EnMAP / PRISMA reflectance, GeoTIFF)</label>
+          <input type="file" id="hyper-scenes" name="scenes" accept=".tif,.tiff" multiple>
+          <label for="hyper-wl">Wavelengths (.hdr or .txt, only if not stored in the GeoTIFF)</label>
+          <input type="file" id="hyper-wl" name="wavelengths" accept=".hdr,.txt,.csv">
+          <label for="hyper-lib">Spectral library for SAM (.csv, optional)</label>
+          <input type="file" id="hyper-lib" name="library" accept=".csv">
+          <p class="hint">Maps alunite, kaolinite, sericite, chlorite, calcite, jarosite, hematite and goethite; the copper and iron models then use them. See docs/MINERALS.md.</p>
+          <button class="btn small ghost">Upload hyperspectral &amp; recompute</button>
+        </form>
+        <form method="post" enctype="multipart/form-data" action="{{ url_for('regions.region_vhr', region_id=row.id) }}" style="margin-top: 8px">{{ csrf_field() }}
+          <label for="vhr-file">Optional: very-high-resolution imagery (WorldView-3, Pleiades, SuperView…, ortho GeoTIFF)</label>
+          <input type="file" id="vhr-file" name="file" accept=".tif,.tiff">
+          <p class="hint">Shown as a base map (layer switcher) for vein, dyke and outcrop interpretation over the targets{% if state.vhr %} · <b>current: {{ state.vhr }} ({{ state.vhr_resolution_m }} m)</b>{% endif %}.</p>
+          <button class="btn small ghost">Upload imagery</button>
+        </form>
         {% endif %}
       </details>
       <details>
@@ -255,6 +271,12 @@
       {% set v = minerals.validation.overall %}
       {% if v.n %}<p><b>Known occurrences:</b> {{ v.n }} inside the region · AUC {{ '%.2f' % v.auc }} · {{ '%.0f' % (v.top10 * 100) }}% in the top 10% of ground.</p>{% endif %}
       {% if minerals.ml %}<p><b>Data-driven model:</b> trained on {{ minerals.ml.occurrences }} occurrences{% if minerals.ml.cv_auc %}, cross-validated AUC {{ '%.2f' % minerals.ml.cv_auc }}{% endif %} (map layer "Minerals - data-driven").</p>{% endif %}
+      {% if hyper %}
+      <h3>Hyperspectral alteration minerals</h3>
+      <p class="muted" style="font-size: 13px">{{ hyper.scenes|length }} scene(s), {{ '%.1f' % hyper.covered_km2 }} km² covered · map layer "Hyperspectral minerals".</p>
+      <table>{% for m in hyper_minerals %}{% set a = hyper.mineral_km2.get(m.key, 0) %}
+        <tr><td><span class="swatch" style="background: {{ m.color }}"></span>{{ m.name }}</td><td class="muted" style="font-size: 12.5px">{{ m.group }}</td><td class="num">{{ '%.2f' % a }} km²</td></tr>{% endfor %}</table>
+      {% endif %}
       {% set ln = minerals.lineaments %}
       <h3>Structural lineaments</h3>
       <p>{{ ln.segments }} lineaments, {{ '{:,.0f}'.format(ln.total_km) }} km in total. Strike directions (length per 15° sector):</p>
@@ -384,6 +406,7 @@
       {% set base = 'regions/' ~ row.id %}
       <div class="row">
         {% if products['report.pdf'] %}<a class="btn small ghost" href="{{ url_for('files', relpath=row.folder ~ '/products/report.pdf') }}?download=1">PDF report</a>{% endif %}
+        {% if summary.acquired %}<a class="btn small ghost" href="{{ url_for('regions.region_geopackage', region_id=row.id) }}" title="All vector layers in one file for ArcGIS Pro / QGIS">GeoPackage (all vectors)</a>{% endif %}
         {% if products['lithology.geojson'] %}<a class="btn small ghost" href="{{ url_for('files', relpath=row.folder ~ '/products/lithology.geojson') }}?download=1">Polygons (GeoJSON)</a>{% endif %}
         {% for l in layers %}<a class="btn small ghost" href="{{ url_for('files', relpath=row.folder ~ '/mosaic/' ~ l ~ '.tif') }}?download=1">{{ l }}.tif</a>{% endfor %}
       </div>
