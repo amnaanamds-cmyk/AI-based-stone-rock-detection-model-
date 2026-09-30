@@ -34,6 +34,7 @@ The first run installs everything into `.venv`, builds a fully processed demo an
 | **AI rock-type mapping** | A CNN is trained alongside Random Forest and SVM. Train and test sets are split by spatial blocks. Each model reports accuracy, kappa, F1 and a confusion matrix. |
 | **Mineral prospectivity** *(new)* | Region-wide anomalies in clay, iron-oxide and ferrous band ratios are mapped, then turned into a **ranked list of exploration targets** with coordinates. Download as CSV or GeoJSON, or view on the map. |
 | **Gemstone prospectivity** *(new in 2.3)* | Ranked target zones for **ruby & spinel (marble), aquamarine / topaz / tourmaline (pegmatite), emerald (contacts) and peridot / nephrite (ultramafic)**. Validated against known localities (AUC), with an optional Random Forest trained on them. Field finds count as localities. See [docs/GEMSTONES.md](docs/GEMSTONES.md). |
+| **Structures & mineral prospectivity** *(new in 2.5)* | Automatic **lineament extraction** (faults and fractures, with rose diagram and density map), plus ranked targets for **iron, copper and quartz-vein antimony / gold**. Optional **ASTER thermal Quartz Index**. Validation with known occurrences, and a Random Forest model once 8 or more are known. See [docs/MINERALS.md](docs/MINERALS.md). |
 | **Landslide / rockfall susceptibility** *(new)* | A five-class hazard map built from slope, relief, river undercutting, rock strength and bare ground, with km² per class. |
 | **Rock map without training data** *(new)* | The area is grouped into spectral units automatically. A geologist names them, and they become a lithology map in one click. |
 | **Field app** *(new)* | A phone page that works offline: GPS, photo, rock type and certainty. Observations become training data and **validate the map** by measuring agreement. |
@@ -57,6 +58,7 @@ rockmap region train regions/gb --reference geology.geojson --field UNIT \
         --mapping examples/gb_geology_mapping.json --out models/gb
 rockmap region classify regions/gb --model models/gb
 rockmap region gems regions/gb --occurrences known_gems.csv   # gemstone prospectivity
+rockmap region minerals regions/gb --occurrences known_mines.csv   # lineaments + iron / copper / vein targets
 rockmap region mosaic regions/gb
 rockmap region stats regions/gb --districts gb_districts.geojson --json stats.json
 rockmap region export regions/gb --out gb_lithology.geojson
@@ -81,6 +83,7 @@ The built-in Gilgit-Baltistan outline is an **approximate** processing extent (a
 * [docs/DELIVERY.md](docs/DELIVERY.md): **customer installation, acceptance checklist, operations, backups**
 * [docs/PITCH.md](docs/PITCH.md): competition pitch and 7-minute demo script
 * [docs/SATELLITE_DATA.md](docs/SATELLITE_DATA.md): **where the satellite imagery comes from** (and why not Google Earth); whole-GB map in 30-60 min
+* [docs/MINERALS.md](docs/MINERALS.md): **lineaments and iron / copper / antimony / gold prospectivity**, including what Sentinel-2 can and cannot detect, ASTER import and known occurrences
 * [docs/GEMSTONES.md](docs/GEMSTONES.md): **gemstone prospectivity**: deposit models, known localities, real results, limitations
 * [docs/GILGIT_BALTISTAN.md](docs/GILGIT_BALTISTAN.md): step-by-step guide for mapping GB, data volumes and timings
 * [docs/USER_MANUAL.md](docs/USER_MANUAL.md): dashboard and command-line manual
@@ -101,7 +104,7 @@ The built-in Gilgit-Baltistan outline is an **approximate** processing extent (a
 
 ## Tests
 ```bash
-pytest                                  # 68 tests incl. a crawl of every page; CI runs them on Windows, macOS and Linux
+pytest                                  # 75 tests incl. a crawl of every page; CI runs them on Windows, macOS and Linux
 rockmap doctor                          # installation self-check
 ROCKMAP_NETWORK_TESTS=1 pytest          # plus a live download of Sentinel-2 + DEM near Gilgit
 ```

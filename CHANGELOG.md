@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.5.0: structures & mineral prospectivity
+- Automatic structural lineaments from the DEM (four-direction hillshade edges plus straightness filter), exported as GeoJSON lines, a density map and a rose diagram.
+- Prospectivity models for iron oxide / iron ore, copper alteration (porphyry / vein) and quartz veins (antimony, gold), with ranked target zones as CSV / GeoJSON, map layers and a PDF page.
+- Optional ASTER thermal Quartz Index (AST_05 upload or `--aster`).
+- Known mineral occurrences (upload, field app, CLI): AUC validation, plus a Random Forest data-driven model with 8 or more occurrences.
+- `rockmap region minerals`; pipeline step 1d; the CLI report now includes analytics, gems and minerals.
+
 ## 2.4.0: whole-region map
 - Imagery is always current: the default season is the last three years including the current one (for example 2024–2026), and among similarly clear scenes the newest are used first.
 - Whole-Gilgit-Baltistan overview at 100 m (`run.sh --gb` / `run.bat --gb`, preset *Gilgit-Baltistan overview map*): a complete real map in under an hour.

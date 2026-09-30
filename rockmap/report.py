@@ -37,7 +37,8 @@ def _table(ax, rows, header, col_widths=None, fontsize=8.5):
 
 def region_report(region, out_path, model_meta: Optional[dict] = None, stats: Optional[dict] = None,
                   organisation: str = "", analytics: Optional[dict] = None,
-                  validation: Optional[dict] = None, gems: Optional[dict] = None) -> Path:
+                  validation: Optional[dict] = None, gems: Optional[dict] = None,
+                  minerals: Optional[dict] = None) -> Path:
     """Multi-page PDF: map, area statistics, district table, model accuracy, data & method."""
     import rasterio
     from matplotlib.backends.backend_pdf import PdfPages
@@ -99,7 +100,7 @@ def region_report(region, out_path, model_meta: Optional[dict] = None, stats: Op
 
         # --- page 2: executive summary ----------------------------------------------
         from .analytics import insights
-        found = insights(stats, analytics, gems)
+        found = insights(stats, analytics, gems, minerals)
         if found:
             fig = plt.figure(figsize=(8.27, 11.69))
             fig.suptitle("Executive summary", fontsize=15, weight="bold", x=0.06, ha="left", y=0.97)
@@ -244,6 +245,58 @@ def region_report(region, out_path, model_meta: Optional[dict] = None, stats: Op
                 text += (f" A data-driven Random Forest was trained on {ml['occurrences']} known localities"
                          + (f" (cross-validated AUC {ml['cv_auc']:.2f})." if ml.get("cv_auc") else "."))
             fig.text(0.06, 0.26, textwrap.fill(text, 100), fontsize=8.5, va="top", color="#333")
+            pdf.savefig(fig)
+            plt.close(fig)
+
+        # --- page 4d: structures & minerals -------------------------------------------
+        if minerals:
+            fig = plt.figure(figsize=(8.27, 11.69))
+            fig.suptitle("Structures and mineral prospectivity", fontsize=15, weight="bold", x=0.06, ha="left", y=0.97)
+            ax = fig.add_axes([0.06, 0.82, 0.88, 0.11])
+            rows = []
+            for m in minerals["models"]:
+                v = m.get("validation") or {}
+                rows.append([m["name"], m["commodities"], str(m["targets"]),
+                             f"AUC {v['auc']:.2f}, {v['top20'] * 100:.0f}% in top 20%" if v.get("n") else "-"])
+            _table(ax, rows, ["Model", "Commodities", "Zones", "Validation (known occurrences)"],
+                   [0.3, 0.33, 0.08, 0.29], fontsize=7.5)
+            ln = minerals.get("lineaments") or {}
+            rose_bins = ln.get("rose") or []
+            if rose_bins:   # rose diagram of lineament strikes (bidirectional)
+                axr = fig.add_axes([0.06, 0.5, 0.3, 0.28], projection="polar")
+                axr.set_theta_zero_location("N")
+                axr.set_theta_direction(-1)
+                w = np.radians(180.0 / len(rose_bins))
+                for rb in rose_bins:
+                    for off in (0, 180):
+                        axr.bar(np.radians(rb["from"] + off) + w / 2, rb["km"], width=w, color="#444", edgecolor="white")
+                axr.set_yticklabels([])
+                axr.set_title(f"Lineament strikes\n{ln.get('segments', 0)} lines, {ln.get('total_km', 0):,.0f} km",
+                              fontsize=8.5)
+            tg = minerals.get("targets_top", [])[:16]
+            ax = fig.add_axes([0.42, 0.44, 0.52, 0.35])
+            if tg:
+                rows = [[t["id"], t["model"], f"{t['lat']:.4f}", f"{t['lon']:.4f}", f"{t['mean_score']:.0f}",
+                         f"{t['area_ha']:.1f}"] for t in tg]
+                _table(ax, rows, ["#", "Model", "Lat", "Lon", "Score", "ha"], [0.1, 0.2, 0.22, 0.22, 0.12, 0.14],
+                       fontsize=7.5)
+            else:
+                ax.axis("off")
+            text = ("Lineaments are straight topographic features (fault- and fracture-controlled valleys, scarps and "
+                    "ridges) extracted automatically from the Copernicus DEM with hillshades lit from four directions; "
+                    "they are candidate structures for geological interpretation. Iron: ferric iron oxide and gossan "
+                    "ratios. Copper: clay / sericite (Al-OH) with an iron-oxide cap on fractured ground. Quartz veins "
+                    "(antimony, gold): lineament density and proximity in pale, iron-poor rock"
+                    + ("; the ASTER thermal Quartz Index is included." if minerals.get("aster") else
+                       ". Quartz and stibnite have no Sentinel-2 signature, so without ASTER thermal data this model "
+                       "is structural.")
+                    + " Clay and sulfate minerals cannot be told apart with Sentinel-2; hyperspectral data is needed for "
+                    "that. Target zones are the top 1 % of the region per model and are not proven deposits.")
+            ml = minerals.get("ml")
+            if ml:
+                text += (f" A data-driven Random Forest was trained on {ml['occurrences']} known occurrences"
+                         + (f" (cross-validated AUC {ml['cv_auc']:.2f})." if ml.get("cv_auc") else "."))
+            fig.text(0.06, 0.4, textwrap.fill(text, 100), fontsize=8.5, va="top", color="#333")
             pdf.savefig(fig)
             plt.close(fig)
 

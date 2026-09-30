@@ -415,6 +415,14 @@ class Region:
             products[f"gem_{m.key}"] = (1, gem_tiles)
         if gem_tiles and all(_band_count(self.tile_dir(k) / "gems.tif") >= 7 for k in gem_tiles):
             products["gem_ml"] = (1, gem_tiles)
+        min_tiles = [k for k in self.tile_keys if (self.tile_dir(k) / "minerals.tif").exists()]
+        from .minerals import MINERAL_MODELS
+        products["lineaments"] = (1, [k for k in self.tile_keys if (self.tile_dir(k) / "lineaments.tif").exists()])
+        products["minerals"] = (1, min_tiles)
+        for m in MINERAL_MODELS:
+            products[f"min_{m.key}"] = (1, min_tiles)
+        if min_tiles and all(_band_count(self.tile_dir(k) / "minerals.tif") >= 6 for k in min_tiles):
+            products["min_ml"] = (1, min_tiles)
         paths = {}
         for pi, (name, (count, keys)) in enumerate(products.items()):
             if not keys:
@@ -435,7 +443,7 @@ class Region:
                     dst.write_colormap(1, class_colormap())
                 factors = [f for f in (2, 4, 8, 16, 32, 64) if max(self.width, self.height) / f >= 256]
                 if factors:
-                    rs = (Resampling.nearest if name in ("lithology", "surface", "hazard", "clusters")
+                    rs = (Resampling.nearest if name in ("lithology", "surface", "hazard", "clusters", "lineaments")
                           else Resampling.average)
                     dst.build_overviews(factors, rs)
                     dst.update_tags(ns="rio_overview", resampling=rs.name)
@@ -449,6 +457,15 @@ class Region:
 
     def _render_tile(self, key: str, name: str) -> np.ndarray:
         d = self.tile_dir(key)
+        if name == "lineaments":
+            with rasterio.open(d / "lineaments.tif") as src:
+                return src.read(1)[None]
+        if name == "minerals" or name.startswith("min_"):
+            from .minerals import MINERAL_MODELS
+            band = 1 if name == "minerals" else 6 if name == "min_ml" else \
+                3 + [m.key for m in MINERAL_MODELS].index(name[4:])
+            with rasterio.open(d / "minerals.tif") as src:
+                return src.read(band)[None]
         if name.startswith("gem"):
             from .gems import GEM_MODELS
             band = 1 if name == "gems" else 7 if name == "gem_ml" else \
@@ -1023,6 +1040,253 @@ class Region:
                 "importance": dict(zip(FEATURE_KEYS, [round(float(v), 3) for v in rf.feature_importances_]))}
 
 
+    # -- 10. structures & mineral prospectivity ----------------------------------------
+    def minerals(self) -> Optional[dict]:
+        p = self.folder / "products" / "minerals.json"
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+
+    def mineral_occurrences(self) -> list[dict]:
+        p = self.folder / "mineral_occurrences.json"
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+
+    def set_mineral_occurrences(self, occurrences: list[dict]) -> None:
+        (self.folder / "mineral_occurrences.json").write_text(json.dumps(occurrences, indent=1), encoding="utf-8")
+
+    def import_aster(self, paths: Sequence[str | Path], progress: Progress = _noop) -> dict:
+        """Import ASTER thermal emissivity (AST_05, bands 10-14 as GeoTIFF) and store the Quartz
+        Index per tile (``tiles/*/aster_qi.tif``); the vein model then uses it automatically."""
+        from .minerals import quartz_index
+        keys = [k for k in self.tile_keys if self.state()["tiles"].get(k, {}).get("acquired")]
+        covered = 0.0
+        for i, key in enumerate(keys):
+            progress(i / max(1, len(keys)), f"ASTER Quartz Index: tile {key}")
+            t = self.tile(key)
+            emis = read_local_to_grid([str(p) for p in paths], t.info, 3)
+            qi = quartz_index(emis)
+            write_raster(self.tile_dir(key) / "aster_qi.tif", qi[None], t.info, nodata=np.nan,
+                         descriptions=["aster_quartz_index"])
+            covered += float(np.isfinite(qi).mean()) / len(keys)
+        self._set(aster_files=[Path(p).name for p in paths], aster_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+        progress(1.0, "ASTER imported")
+        return {"tiles": len(keys), "coverage": round(covered, 3)}
+
+    def _aster_qi(self, key: str, window_shape, sl) -> Optional[np.ndarray]:
+        p = self.tile_dir(key) / "aster_qi.tif"
+        if not p.exists():
+            return None
+        qi = np.full(window_shape, np.nan, np.float32)
+        with rasterio.open(p) as src:
+            qi[sl] = src.read(1)
+        return qi
+
+    def _mineral_inputs(self, key: str):
+        """Tile scene with halo, usable bedrock mask, lineaments and raw evidence."""
+        from .gems import bedrock_mask
+        from .minerals import lineament_density, lineaments, raw_evidence
+        t, scene, sl = self._read_tile(key, halo=48)
+        px = self.config.resolution
+        usable = self._gem_usable(scene)
+        rock = bedrock_mask(scene.dem, px)
+        if rock is not None:
+            usable &= rock
+        has_dem = scene.dem is not None and np.isfinite(scene.dem).any()
+        if has_dem:
+            lin, strike = lineaments(scene.dem, px, valid=np.isfinite(scene.dem))
+        else:
+            lin, strike = np.zeros(usable.shape, bool), np.full(usable.shape, np.nan, np.float32)
+        dens = lineament_density(lin, px)
+        raw = raw_evidence(scene.reflectance, dens, self._aster_qi(key, usable.shape, sl))
+        return t, scene, sl, usable, lin, strike, dens, raw
+
+    def mineral_analysis(self, occurrences: Optional[list[dict]] = None, progress: Progress = _noop,
+                         log: Log = print, samples_per_tile: int = 4000, seed: int = 0) -> dict:
+        """Lineaments + iron / copper / quartz-vein prospectivity (see :mod:`rockmap.minerals`).
+
+        Writes ``tiles/*/lineaments.tif`` (band 1 strike sector 1-12, 2 density x10 km/km2),
+        ``tiles/*/minerals.tif`` (band 1 best score+1, 2 best model, 3-5 model scores+1, 6 data-driven
+        score+1 when trained) and ``products/minerals.json``, ``mineral_targets.*``, ``lineaments.geojson``.
+        """
+        from .gems import success_rates
+        from .minerals import (EVIDENCE, FEATURE_KEYS, MAX_TARGETS_PER_MODEL, MINERAL_MODELS, MineralStats,
+                               evidence_layers, find_targets, lineament_segments, model_scores, rose,
+                               target_cutoffs)
+        occurrences = list(occurrences if occurrences is not None else self.mineral_occurrences())
+        st = self.state()["tiles"]
+        keys = [k for k in self.tile_keys if st.get(k, {}).get("acquired")]
+        if not keys:
+            raise ValueError("No acquired tiles - acquire imagery first")
+        rng = np.random.default_rng(seed)
+        px = self.config.resolution
+        ts = self.config.tile_size
+        occ_px = []
+        if occurrences:
+            xs, ys = warp_transform("EPSG:4326", self.crs, [o["lon"] for o in occurrences],
+                                    [o["lat"] for o in occurrences])
+            for x, y in zip(xs, ys):
+                c, r = ~self.transform * (x, y)
+                occ_px.append((int(r), int(c)))
+
+        # pass 1: lineaments (saved) and robust statistics of the evidence on usable bedrock
+        samples = {k: [] for k in EVIDENCE}
+        segments: list[dict] = []
+        for i, key in enumerate(keys):
+            progress(0.02 + 0.3 * i / len(keys), f"Lineaments and evidence: tile {key} ({i + 1}/{len(keys)})")
+            t, scene, sl, usable, lin, strike, dens, raw = self._mineral_inputs(key)
+            inside = self.aoi_mask(t.info)
+            code = np.where(lin[sl], np.round(np.nan_to_num(strike[sl]) / 15.0).astype(int) % 12 + 1, 0)
+            code[~inside] = 0
+            write_raster(self.tile_dir(key) / "lineaments.tif",
+                         np.stack([code, np.clip(np.round(dens[sl] * 10), 0, 255) * inside]).astype(np.uint8),
+                         t.info, nodata=0, descriptions=["strike_sector", "density_km_per_km2_x10"])
+            segs = lineament_segments(lin[sl] & inside, strike[sl], t.info.transform, px)
+            segments += segs
+            rr, cc = np.nonzero(usable)
+            if len(rr) >= 50:
+                take = rng.choice(len(rr), min(samples_per_tile, len(rr)), replace=False)
+                for k in EVIDENCE:
+                    samples[k].append(raw[k][rr[take], cc[take]])
+        if not samples["clay"]:
+            raise ValueError("No usable (snow-, cloud- and vegetation-free) bedrock pixels")
+        vals = {k: np.concatenate(v) for k, v in samples.items()}
+        vals = {k: v for k, v in vals.items() if np.isfinite(v).sum() > 100}   # quartz index only with ASTER
+        stats = MineralStats.fit(vals)
+        aster = "quartz_index" in stats.median
+
+        # pass 2: scores, background samples, occurrence scores and features
+        n_models = len(MINERAL_MODELS)
+        px_km2 = (px / 1000) ** 2
+        high = np.zeros(n_models + 1)
+        background = [[] for _ in range(n_models + 1)]
+        occ_scores = [None] * len(occurrences)
+        occ_feats = [None] * len(occurrences)
+        bg_feats = []
+        for i, key in enumerate(keys):
+            progress(0.35 + 0.45 * i / len(keys), f"Mineral prospectivity: tile {key} ({i + 1}/{len(keys)})")
+            t, scene, sl, usable, lin, strike, dens, raw = self._mineral_inputs(key)
+            ev = evidence_layers(raw, usable, stats, lin, px)
+            scores = model_scores(ev)
+            core_ok = usable[sl] & self.aoi_mask(t.info)
+            sc = np.where(core_ok[None], scores[:, sl[0], sl[1]], 0)
+            best = sc.max(axis=0)
+            allsc = np.concatenate([best[None], sc])
+            dom = np.where(core_ok, np.argmax(sc, axis=0) + 1, 0)
+            bands = [np.where(core_ok, np.round(best) + 1, 0), dom] + \
+                    [np.where(core_ok, np.round(sc[m]) + 1, 0) for m in range(n_models)]
+            write_raster(self.tile_dir(key) / "minerals.tif", np.stack(bands).astype(np.uint8), t.info, nodata=0,
+                         descriptions=["mineral_score_plus1", "mineral_model"] + [f"{m.key}_plus1" for m in MINERAL_MODELS])
+            for m in range(n_models + 1):
+                high[m] += float(((allsc[m] >= 75) & core_ok).sum()) * px_km2
+            rr, cc = np.nonzero(core_ok)
+            if len(rr):
+                take = rng.choice(len(rr), min(3000, len(rr)), replace=False)
+                for m in range(n_models + 1):
+                    background[m].append(allsc[m][rr[take], cc[take]])
+                bg_feats.append(np.stack([ev[f][sl][rr[take], cc[take]] for f in FEATURE_KEYS], 1))
+            y0, x0 = int(t.window.row_off), int(t.window.col_off)
+            for j, (r, c) in enumerate(occ_px):
+                if y0 <= r < y0 + ts and x0 <= c < x0 + ts:
+                    lr, lc = r - y0, c - x0
+                    r0, r1, c0, c1 = max(0, lr - 1), lr + 2, max(0, lc - 1), lc + 2
+                    occ_scores[j] = [float(allsc[m][r0:r1, c0:c1].max()) for m in range(n_models + 1)]
+                    occ_feats[j] = np.stack([ev[f][sl][r0:r1, c0:c1].reshape(-1) for f in FEATURE_KEYS], 1)
+            self._update_tile(key, minerals=True)
+
+        bg = [np.concatenate(b) if b else np.zeros(0) for b in background]
+        validation = {"overall": success_rates([s[0] for s in occ_scores if s is not None], bg[0])}
+        for mi, m in enumerate(MINERAL_MODELS, start=1):
+            v = [s[mi] for o, s in zip(occurrences, occ_scores) if s is not None and o.get("model") == m.key]
+            validation[m.key] = success_rates(v, bg[mi])
+        inside = sum(1 for s in occ_scores if s is not None)
+        ml = self._mineral_ml(occ_feats, bg_feats, keys, stats, progress, log, seed) if inside >= 8 else None
+
+        # targets: compact zones in each model's own top 1 %, best first, >= 500 m apart
+        cutoffs = target_cutoffs({m.key: bg[i + 1] for i, m in enumerate(MINERAL_MODELS)})
+        progress(0.96, "Delineating mineral targets")
+        targets = []
+        for key in keys:
+            t = self.tile(key)
+            with rasterio.open(self.tile_dir(key) / "minerals.tif") as src:
+                sc = np.clip(src.read(list(range(3, 3 + n_models))).astype(np.float32) - 1, 0, None)
+            dem_c = None
+            if (self.tile_dir(key) / "dem.tif").exists():
+                with rasterio.open(self.tile_dir(key) / "dem.tif") as src:
+                    dem_c = src.read(1)
+            targets += [dict(tt, tile=key) for tt in find_targets(sc, t.info.transform, px_km2 * 100, cutoffs,
+                                                                  elevation=dem_c)]
+        ranked = []
+        for m in MINERAL_MODELS:
+            kept = []
+            for tt in sorted((x for x in targets if x["model"] == m.key), key=lambda x: -x["rank_score"]):
+                if all(math.hypot(tt["x"] - k["x"], tt["y"] - k["y"]) >= 500 for k in kept):
+                    kept.append(tt)
+                if len(kept) >= MAX_TARGETS_PER_MODEL:
+                    break
+            ranked += kept
+        targets = sorted(ranked, key=lambda x: -x["rank_score"])
+        if targets:
+            lons, lats = warp_transform(self.crs, "EPSG:4326", [x["x"] for x in targets], [x["y"] for x in targets])
+            for n, (tt, lo, la) in enumerate(zip(targets, lons, lats), start=1):
+                tt.update(id=n, lon=round(lo, 6), lat=round(la, 6))
+        out = self.folder / "products"
+        out.mkdir(exist_ok=True)
+        _write_mineral_targets(out, targets)
+        _write_lineaments(out, segments, self.crs)
+        total_km = sum(s["length_m"] for s in segments) / 1000.0
+        per_model = [{"key": m.key, "name": m.name, "commodities": m.commodities, "color": m.color,
+                      "setting": m.setting, "high_km2": round(high[mi], 2), "target_cutoff": round(cutoffs[m.key], 1),
+                      "targets": sum(1 for x in targets if x["model"] == m.key), "validation": validation[m.key]}
+                     for mi, m in enumerate(MINERAL_MODELS, start=1)]
+        result = {"created": time.strftime("%Y-%m-%d %H:%M:%S"), "stats": stats.to_dict(), "aster": aster,
+                  "models": per_model, "high_km2": round(high[0], 2), "targets_total": len(targets),
+                  "targets_top": targets[:30], "occurrences": len(occurrences), "occurrences_inside": inside,
+                  "validation": validation, "ml": ml,
+                  "lineaments": {"segments": len(segments), "total_km": round(total_km, 1), "rose": rose(segments)}}
+        (out / "minerals.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+        self._set(minerals_at=result["created"])
+        progress(1.0, f"Mineral prospectivity complete: {len(targets)} targets, {len(segments)} lineaments")
+        return result
+
+    def _mineral_ml(self, occ_feats, bg_feats, keys, stats, progress, log, seed) -> Optional[dict]:
+        """Random Forest on known occurrences vs. background (grouped CV), appended as band 6."""
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.metrics import roc_auc_score
+        from sklearn.model_selection import GroupKFold
+        from .minerals import FEATURE_KEYS, evidence_layers
+        pos = [(j, f) for j, f in enumerate(occ_feats) if f is not None]
+        X_pos = np.concatenate([f for _, f in pos])
+        g_pos = np.concatenate([np.full(len(f), j) for j, f in pos])
+        rng = np.random.default_rng(seed)
+        bgf = np.concatenate(bg_feats)
+        bgf = bgf[rng.choice(len(bgf), min(len(bgf), 20 * len(X_pos)), replace=False)]
+        X = np.concatenate([X_pos, bgf])
+        y = np.concatenate([np.ones(len(X_pos)), np.zeros(len(bgf))])
+        groups = np.concatenate([g_pos, 10_000 + rng.integers(0, 5, len(bgf))])
+        rf = RandomForestClassifier(n_estimators=300, min_samples_leaf=3, class_weight="balanced",
+                                    random_state=seed, n_jobs=-1)
+        aucs = []
+        for tr, te in GroupKFold(n_splits=min(5, len(pos))).split(X, y, groups):
+            if len(set(y[te])) < 2:
+                continue
+            rf.fit(X[tr], y[tr])
+            aucs.append(roc_auc_score(y[te], rf.predict_proba(X[te])[:, 1]))
+        rf.fit(X, y)
+        log(f"mineral ML model: {len(pos)} occurrences, cross-validated AUC {np.mean(aucs):.3f}"
+            if aucs else "mineral ML model trained (too few folds for CV)")
+        for i, key in enumerate(keys):
+            progress(0.8 + 0.15 * i / len(keys), f"Data-driven mineral model: tile {key}")
+            t, scene, sl, usable, lin, strike, dens, raw = self._mineral_inputs(key)
+            ev = evidence_layers(raw, usable, stats, lin, self.config.resolution)
+            core_ok = usable[sl] & self.aoi_mask(t.info)
+            feats = np.stack([ev[f][sl][core_ok] for f in FEATURE_KEYS], 1)
+            band = np.zeros(core_ok.shape, np.uint8)
+            if len(feats):
+                band[core_ok] = np.round(rf.predict_proba(feats)[:, 1] * 100).astype(np.uint8) + 1
+            with rasterio.open(self.tile_dir(key) / "minerals.tif") as src:
+                data = src.read()[:5]
+            write_raster(self.tile_dir(key) / "minerals.tif", np.concatenate([data, band[None]]), t.info, nodata=0)
+        return {"occurrences": len(pos), "cv_auc": round(float(np.mean(aucs)), 3) if aucs else None,
+                "importance": dict(zip(FEATURE_KEYS, [round(float(v), 3) for v in rf.feature_importances_]))}
+
 def replace_file(src: Path, dst: Path, attempts: int = 40) -> None:
     """os.replace with retries: on Windows the target may briefly be open in another thread/process."""
     for i in range(attempts):
@@ -1106,3 +1370,32 @@ def _write_gem_targets(out: Path, targets: list[dict]) -> None:
 def _band_count(path: Path) -> int:
     with rasterio.open(path) as src:
         return src.count
+
+
+def _write_mineral_targets(out: Path, targets: list[dict]) -> None:
+    import csv
+    feats = [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [t["lon"], t["lat"]]},
+              "properties": {k: v for k, v in t.items() if k not in ("x", "y", "lon", "lat")}} for t in targets]
+    (out / "mineral_targets.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": feats}),
+                                                 encoding="utf-8")
+    cols = ["id", "lat", "lon", "model_name", "commodities", "mean_score", "peak_score", "area_ha", "elevation_m", "tile"]
+    with open(out / "mineral_targets.csv", "w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(cols)
+        for t in targets:
+            w.writerow([t.get(c) for c in cols])
+
+
+def _write_lineaments(out: Path, segments: list[dict], crs) -> None:
+    """Lineaments as WGS84 GeoJSON lines (strike in degrees, length in metres)."""
+    feats = []
+    if segments:
+        xs = [v for s in segments for v in (s["x1"], s["x2"])]
+        ys = [v for s in segments for v in (s["y1"], s["y2"])]
+        lons, lats = warp_transform(crs, "EPSG:4326", xs, ys)
+        for i, s in enumerate(segments):
+            feats.append({"type": "Feature", "properties": {"id": i + 1, "strike": s["strike"], "length_m": s["length_m"]},
+                          "geometry": {"type": "LineString", "coordinates": [[round(lons[2 * i], 6), round(lats[2 * i], 6)],
+                                                                             [round(lons[2 * i + 1], 6), round(lats[2 * i + 1], 6)]]}})
+    (out / "lineaments.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": feats}),
+                                            encoding="utf-8")

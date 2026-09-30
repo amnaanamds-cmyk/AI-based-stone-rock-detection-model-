@@ -293,3 +293,47 @@ def test_gem_workflow_in_dashboard(client, app, small_scene):
     assert client.get(f"/tiles/{rid}/gem_pegmatite/12/0/0.png").status_code == 200
     field = client.get("/field/").get_data(as_text=True)
     assert "aquamarine" in field.lower()
+
+
+def test_mineral_workflow_in_dashboard(client, app, small_scene, tmp_path):
+    rid, (w, s, e, n) = _local_region(client, small_scene)
+    client.post(f"/regions/{rid}/run", data={"stage": "acquire"})
+    csv_data = f"lat,lon,commodity,name\n{(s + n) / 2},{(w + e) / 2},copper,Test prospect\n".encode()
+    r = client.post(f"/regions/{rid}/mineral-occurrences", data={"file": (io.BytesIO(csv_data), "occ.csv"),
+                                                                 "mode": "replace"},
+                    content_type="multipart/form-data", follow_redirects=True)
+    assert b"1 known mineral occurrences saved" in r.data
+    assert client.post("/api/observations", json={"lat": (s + n) / 2, "lon": (w + e) / 2, "class_id": 1,
+                                                   "commodity": "antimony"}).status_code == 201
+    assert client.post("/api/observations", json={"lat": (s + n) / 2, "lon": (w + e) / 2, "class_id": 1,
+                                                   "commodity": "unobtainium"}).status_code == 400
+    assert len(client.get(f"/api/regions/{rid}/mineral-occurrences").get_json()["features"]) == 2
+    client.post(f"/regions/{rid}/run", data={"stage": "minerals"})
+    page = client.get(f"/regions/{rid}").get_data(as_text=True)
+    assert "Mineral prospectivity" in page and "Structural lineaments" in page
+    assert client.get(f"/api/regions/{rid}/mineral-targets").get_json()["type"] == "FeatureCollection"
+    assert client.get(f"/api/regions/{rid}/lineaments").get_json()["type"] == "FeatureCollection"
+    assert client.get(f"/regions/{rid}/mineral_targets.csv").status_code == 200
+    assert client.get(f"/regions/{rid}/lineaments.geojson").status_code == 200
+    for layer in ("minerals", "min_vein", "lineaments"):
+        assert client.get(f"/tiles/{rid}/{layer}/12/0/0.png").status_code == 200
+
+    # ASTER emissivity upload -> Quartz Index -> vein model uses it
+    import numpy as np
+    import rasterio
+    from rockmap.io import read_raster
+    _, info = read_raster(small_scene["scene"])
+    emis = np.stack([np.full((info.height, info.width), v, np.float32) for v in (0.8, 0.9, 0.8)])
+    buf = io.BytesIO()
+    with rasterio.MemoryFile() as mem:
+        with mem.open(driver="GTiff", width=info.width, height=info.height, count=3, dtype="float32",
+                      crs=info.crs, transform=info.transform) as dst:
+            dst.write(emis)
+        buf.write(mem.read())
+    buf.seek(0)
+    r = client.post(f"/regions/{rid}/aster", data={"files": (buf, "ast05.tif")},
+                    content_type="multipart/form-data", follow_redirects=True)
+    assert b"ASTER file(s) uploaded" in r.data
+    assert "ASTER in use" in client.get(f"/regions/{rid}").get_data(as_text=True)
+    field = client.get("/field/").get_data(as_text=True)
+    assert "antimony" in field.lower()

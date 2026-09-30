@@ -44,7 +44,10 @@
   }
   var extra = { alteration: "Mineral alteration score", hazard: "Landslide / rockfall susceptibility", clusters: "Spectral units",
     gems: "Gem prospectivity (best setting)", gem_marble: "Gem - ruby & spinel (marble)", gem_pegmatite: "Gem - aquamarine / topaz / tourmaline (pegmatite)",
-    gem_contact: "Gem - emerald & beryl (contacts)", gem_ultramafic: "Gem - peridot & nephrite (ultramafic)", gem_ml: "Gem - data-driven (known localities)" };
+    gem_contact: "Gem - emerald & beryl (contacts)", gem_ultramafic: "Gem - peridot & nephrite (ultramafic)", gem_ml: "Gem - data-driven (known localities)",
+    minerals: "Minerals (best model)", min_iron: "Minerals - iron oxide / iron ore", min_copper: "Minerals - copper alteration",
+    min_vein: "Minerals - quartz veins (antimony, gold)", min_ml: "Minerals - data-driven (known occurrences)",
+    lineaments: "Lineament pixels (raster)" };
   Object.keys(extra).forEach(function (l) {
     if (available.indexOf(l) >= 0) overlays[extra[l]] = L.tileLayer(tileUrl(l), { maxZoom: 17, maxNativeZoom: 16, opacity: l === "clusters" ? 0.75 : 0.85 });
   });
@@ -143,6 +146,50 @@
   if (el.dataset.gemOccApi) {
     fetch(el.dataset.gemOccApi).then(function (r) { return r.json(); }).then(function (d) { gemOcc.addData(d); if (d.features.length) gemOcc.addTo(map); });
     overlays["Known gem localities"] = gemOcc;
+  }
+  var minKeys = el.dataset.minModels ? JSON.parse(el.dataset.minModels) : [];
+  var minColors = el.dataset.minColors ? JSON.parse(el.dataset.minColors) : [];
+  var minColor = function (k) { var i = minKeys.indexOf(k); return i >= 0 ? minColors[i] : "#8c510a"; };
+  var minTargets = L.geoJSON(null, {
+    pointToLayer: function (f, ll) {
+      return L.marker(ll, { icon: L.divIcon({ className: "", iconSize: [18, 18], html:
+        "<div class='gem-marker' style='background:" + esc(minColor(f.properties.model)) + "'>&#9650;</div>" }) });
+    },
+    onEachFeature: function (f, layer) {
+      var p = f.properties;
+      layer.bindPopup("<b>Mineral target #" + (+p.id) + "</b><br>" + esc(p.model_name) + "<br><i>" + esc(p.commodities) + "</i>" +
+        "<br>Score " + (+p.mean_score).toFixed(0) + " · " + (+p.area_ha).toFixed(1) + " ha" +
+        (p.elevation_m ? " · " + Math.round(p.elevation_m) + " m" : "") +
+        "<br><span class='muted'>Screening target - verify in the field.</span>");
+    }
+  });
+  if (el.dataset.minTargetsApi) {
+    fetch(el.dataset.minTargetsApi).then(function (r) { return r.json(); }).then(function (d) { if (d.features) minTargets.addData(d); });
+    overlays["Mineral target zones"] = minTargets;
+  }
+  var lineLayer = L.geoJSON(null, {
+    style: { color: "#111", weight: 1.5, opacity: 0.8 },
+    onEachFeature: function (f, layer) {
+      layer.bindPopup("<b>Lineament</b><br>strike " + (+f.properties.strike).toFixed(0) + "° · " + Math.round(f.properties.length_m) + " m");
+    }
+  });
+  if (el.dataset.lineamentsApi) {
+    fetch(el.dataset.lineamentsApi).then(function (r) { return r.json(); }).then(function (d) { if (d.features) lineLayer.addData(d); });
+    overlays["Structural lineaments"] = lineLayer;
+  }
+  var minOcc = L.geoJSON(null, {
+    pointToLayer: function (f, ll) {
+      return L.marker(ll, { icon: L.divIcon({ className: "", iconSize: [20, 20], html: "<div class='gem-known' style='color:#ff7f00'>&#9874;</div>" }) });
+    },
+    onEachFeature: function (f, layer) {
+      var p = f.properties;
+      layer.bindPopup("<b>Known occurrence</b><br>" + esc(p.commodity || "?") + (p.name ? "<br>" + esc(p.name) : "") +
+        "<br><span class='muted'>source: " + esc(p.source) + "</span>");
+    }
+  });
+  if (el.dataset.minOccApi) {
+    fetch(el.dataset.minOccApi).then(function (r) { return r.json(); }).then(function (d) { minOcc.addData(d); if (d.features.length) minOcc.addTo(map); });
+    overlays["Known mineral occurrences"] = minOcc;
   }
   document.querySelectorAll(".zoom-to").forEach(function (a) {
     a.addEventListener("click", function (e) {

@@ -26,6 +26,11 @@
          data-gem-occ-api="{{ url_for('regions.api_region_gem_occurrences', region_id=row.id) }}"
          data-gem-models="{{ gem_models|map(attribute='key')|list|tojson|forceescape }}"
          data-gem-colors="{{ gem_models|map(attribute='color')|list|tojson|forceescape }}"
+         data-min-targets-api="{{ url_for('regions.api_region_mineral_targets', region_id=row.id) }}"
+         data-min-occ-api="{{ url_for('regions.api_region_mineral_occurrences', region_id=row.id) }}"
+         data-lineaments-api="{{ url_for('regions.api_region_lineaments', region_id=row.id) if products['lineaments.geojson'] else '' }}"
+         data-min-models="{{ mineral_models|map(attribute='key')|list|tojson|forceescape }}"
+         data-min-colors="{{ mineral_models|map(attribute='color')|list|tojson|forceescape }}"
          data-obs-api="{{ url_for('field.api_observations', region_id=row.id) }}"
          data-tile-url="{{ url_for('regions.tile', region_id=row.id, layer='LAYER', z=0, x=0, y=0)|replace('/0/0/0.png', '/{z}/{x}/{y}.png') }}?v={{ version }}"
          data-layers="{{ layers|tojson|forceescape }}"
@@ -100,6 +105,22 @@
           <p class="hint">Ranks ground for ruby / spinel (marble), aquamarine / topaz / tourmaline / garnet (pegmatite), emerald / beryl (contacts) and peridot / nephrite (ultramafic). {{ gem_occ|length }} known localities will validate the maps{{ ' and train a data-driven model' if gem_occ|length >= 8 }}.</p>
           <button class="btn small" {{ 'disabled' if not summary.acquired }}>Run gem prospectivity</button>
         </form>
+      </details>
+      <details {{ 'open' if summary.acquired and gems and not minerals }}>
+        <summary><b>1d · Lineaments &amp; mineral prospectivity</b> {% if minerals %}<span class="muted">(done {{ minerals.created[5:16] }})</span>{% endif %}</summary>
+        <form method="post" action="{{ url_for('regions.region_run', region_id=row.id) }}">{{ csrf_field() }}
+          <input type="hidden" name="stage" value="minerals">
+          <p class="hint">Extracts structural lineaments (faults, fractures) from the DEM and ranks ground for iron, copper and quartz-vein antimony / gold. {{ min_occ|length }} known occurrences will validate the maps{{ ' and train a data-driven model' if min_occ|length >= 8 }}.</p>
+          <button class="btn small" {{ 'disabled' if not summary.acquired }}>Run lineaments &amp; minerals</button>
+        </form>
+        {% if has_role('analyst') %}
+        <form method="post" enctype="multipart/form-data" action="{{ url_for('regions.region_aster', region_id=row.id) }}" style="margin-top: 8px">{{ csrf_field() }}
+          <label for="aster-files">Optional: ASTER thermal emissivity (AST_05, bands 10-14, GeoTIFF)</label>
+          <input type="file" id="aster-files" name="files" accept=".tif,.tiff" multiple>
+          <p class="hint">Adds the thermal Quartz Index (quartz is invisible to Sentinel-2). Free from NASA Earthdata Search after registration; see docs/MINERALS.md.{% if minerals and minerals.aster %} <b>ASTER in use.</b>{% endif %}</p>
+          <button class="btn small ghost">Upload ASTER &amp; recompute</button>
+        </form>
+        {% endif %}
       </details>
       <details>
         <summary><b>2 · Training data & model</b> <span class="muted">({{ counts.reference_files }} maps, {{ counts.drawn_areas }} drawn areas, {{ counts.field_observations }} field points)</span></summary>
@@ -211,6 +232,60 @@
           <button class="btn small ghost">Upload localities</button>
         </form>
         {% if gem_occ %}<form method="post" action="{{ url_for('regions.region_gem_occurrences', region_id=row.id) }}" style="margin-top: 6px">{{ csrf_field() }}<input type="hidden" name="action" value="clear"><button class="btn small danger">Remove uploaded localities</button></form>{% endif %}
+      </details>
+      {% endif %}
+    </div>
+
+    <div class="card gem-card">
+      <h2>⛏ Mineral prospectivity &amp; structures</h2>
+      {% if products['mineral_targets.csv'] or products['lineaments.geojson'] %}<div class="row" style="margin-bottom: 6px"><span class="muted" style="font-size: 13px">Downloads:</span>
+        {% if products['mineral_targets.csv'] %}<a class="btn small ghost" href="{{ url_for('regions.region_mineral_targets_file', region_id=row.id, fmt='csv') }}">Targets CSV</a>
+        <a class="btn small ghost" href="{{ url_for('regions.region_mineral_targets_file', region_id=row.id, fmt='geojson') }}">Targets GeoJSON</a>{% endif %}
+        {% if products['lineaments.geojson'] %}<a class="btn small ghost" href="{{ url_for('regions.region_lineaments_file', region_id=row.id) }}">Lineaments GeoJSON</a>{% endif %}</div>{% endif %}
+      {% if minerals %}
+      <p class="hint">Knowledge-driven models per commodity. Target zones = top 1 % of the region for each model. {% if not minerals.aster %}Without ASTER thermal data the quartz-vein model is structural only (quartz and stibnite have no Sentinel-2 signature).{% endif %} Screening for field work — not proven deposits.</p>
+      <div class="table-wrap"><table>
+        <tr><th>Model</th><th>Commodities</th><th class="num">Zones</th><th class="num">Validation</th></tr>
+        {% for m in minerals.models %}
+        <tr><td><span class="swatch" style="background: {{ m.color }}"></span>{{ m.name }}</td><td class="muted" style="font-size: 12.5px">{{ m.commodities }}</td>
+          <td class="num">{{ m.targets }}</td>
+          <td class="num">{% if m.validation.n %}<span title="AUC {{ m.validation.auc }}, {{ m.validation.n }} occurrences">{{ '%.0f' % (m.validation.top20 * 100) }}% in top 20%</span>{% else %}<span class="muted">–</span>{% endif %}</td></tr>
+        {% endfor %}
+      </table></div>
+      {% set v = minerals.validation.overall %}
+      {% if v.n %}<p><b>Known occurrences:</b> {{ v.n }} inside the region · AUC {{ '%.2f' % v.auc }} · {{ '%.0f' % (v.top10 * 100) }}% in the top 10% of ground.</p>{% endif %}
+      {% if minerals.ml %}<p><b>Data-driven model:</b> trained on {{ minerals.ml.occurrences }} occurrences{% if minerals.ml.cv_auc %}, cross-validated AUC {{ '%.2f' % minerals.ml.cv_auc }}{% endif %} (map layer "Minerals - data-driven").</p>{% endif %}
+      {% set ln = minerals.lineaments %}
+      <h3>Structural lineaments</h3>
+      <p>{{ ln.segments }} lineaments, {{ '{:,.0f}'.format(ln.total_km) }} km in total. Strike directions (length per 15° sector):</p>
+      {% set mx = (ln.rose|map(attribute='km')|max) or 1 %}
+      <table>{% for r in ln.rose %}<tr><td class="mono" style="width: 90px">{{ '%03.0f' % r.from }}–{{ '%03.0f' % r.to }}°</td>
+        <td><div class="bar"><span style="width: {{ (r.km / mx * 100)|round(1) }}%; background: #333"></span></div></td><td class="num">{{ '%.0f' % r.km }} km</td></tr>{% endfor %}</table>
+      {% if minerals.targets_top %}
+      <h3>Top target zones</h3>
+      <div class="table-wrap"><table>
+        <tr><th>#</th><th>Model</th><th class="num">Score</th><th class="num">ha</th><th class="num">Elev.</th><th></th></tr>
+        {% for t in minerals.targets_top[:12] %}
+        <tr><td>{{ t.id }}</td><td><span class="swatch" style="background: {{ (mineral_models|selectattr('key', 'equalto', t.model)|first).color }}"></span>{{ t.model_name }}</td>
+          <td class="num">{{ '%.0f' % t.mean_score }}</td><td class="num">{{ '%.1f' % t.area_ha }}</td>
+          <td class="num">{{ '%.0f' % t.elevation_m if t.elevation_m else '–' }}</td>
+          <td><a href="#" class="zoom-to" data-lat="{{ t.lat }}" data-lon="{{ t.lon }}">zoom</a></td></tr>
+        {% endfor %}
+      </table></div>
+      {% endif %}
+      {% else %}
+      <p class="empty">Run step 1d "Lineaments &amp; mineral prospectivity" (after acquiring imagery).</p>
+      {% endif %}
+      {% if has_role('analyst') %}
+      <details><summary>Known mineral occurrences ({{ min_occ|length }})</summary>
+        <p class="hint">Mines, prospects and showings (e.g. Geological Survey of Pakistan mineral maps): CSV with columns <span class="mono">lat, lon, commodity, name</span>, or GeoJSON points with a <span class="mono">commodity</span> property. Commodities: {{ commodity_names|join(', ') }} (also haematite, magnetite, stibnite, porphyry…). Field-app observations with a commodity are added automatically.</p>
+        <form method="post" enctype="multipart/form-data" action="{{ url_for('regions.region_mineral_occurrences', region_id=row.id) }}">{{ csrf_field() }}
+          <input type="file" name="file" accept=".csv,.geojson,.json" required>
+          <label class="check"><input type="radio" name="mode" value="replace" checked> replace uploaded list</label>
+          <label class="check"><input type="radio" name="mode" value="append"> add to it</label>
+          <button class="btn small ghost">Upload occurrences</button>
+        </form>
+        {% if min_occ %}<form method="post" action="{{ url_for('regions.region_mineral_occurrences', region_id=row.id) }}" style="margin-top: 6px">{{ csrf_field() }}<input type="hidden" name="action" value="clear"><button class="btn small danger">Remove uploaded occurrences</button></form>{% endif %}
       </details>
       {% endif %}
     </div>

@@ -22,8 +22,10 @@ from .jobs import handler
 
 bp = Blueprint("regions", __name__)
 LAYERS = ("rgb", "falsecolor", "hillshade", "surface", "lithology", "confidence", "alteration", "hazard", "clusters",
-          "gems", "gem_marble", "gem_pegmatite", "gem_contact", "gem_ultramafic", "gem_ml")
-STAGES = {"acquire": "region_acquire", "analyze": "region_analyze", "gems": "region_gems", "train": "region_train",
+          "gems", "gem_marble", "gem_pegmatite", "gem_contact", "gem_ultramafic", "gem_ml",
+          "minerals", "min_iron", "min_copper", "min_vein", "min_ml", "lineaments")
+STAGES = {"acquire": "region_acquire", "analyze": "region_analyze", "gems": "region_gems",
+          "minerals": "region_minerals", "train": "region_train",
           "classify": "region_classify", "products": "region_products", "pipeline": "region_pipeline"}
 
 
@@ -131,7 +133,7 @@ def _do_products(ctx, region: Region, a=0.0, b=1.0):
     validation = region.field_validation(obs) if obs and stats.get("classified_km2") else None
     region_report(region, out / "report.pdf", load_meta(model) if model else None, stats,
                   os.environ.get("ROCKMAP_ORGANISATION", ""), analytics=region.analytics(), validation=validation,
-                  gems=region.gems())
+                  gems=region.gems(), minerals=region.minerals())
 
 
 def _region_for(ctx) -> Region:
@@ -180,6 +182,40 @@ def _do_gems(ctx, region: Region, a=0.0, b=1.0):
     region.gem_analysis(occ, _scaled(ctx, a, b), ctx.log)
 
 
+def mineral_occurrences(db: Database, region: Region, region_id: int) -> list[dict]:
+    """Known mineral occurrences: uploaded lists + field-app observations that name a commodity."""
+    from ..minerals import COMMODITY_TYPES
+    occ = list(region.mineral_occurrences())
+    for o in db.all("observations", "region_id = ? AND commodity IS NOT NULL AND commodity != ''", (region_id,)):
+        occ.append({"lat": o["lat"], "lon": o["lon"], "commodity": o["commodity"], "name": f"field #{o['id']}",
+                    "model": COMMODITY_TYPES.get(o["commodity"]), "source": "field"})
+    return occ
+
+
+def _do_minerals(ctx, region: Region, a=0.0, b=1.0):
+    occ = mineral_occurrences(ctx.db, region, ctx.job["region_id"])
+    ctx.log(f"known mineral occurrences: {len(occ)}")
+    res = region.mineral_analysis(occ, _scaled(ctx, a, b), ctx.log)
+    ctx.log(f"lineaments: {res['lineaments']['segments']} ({res['lineaments']['total_km']} km); "
+            f"targets: {res['targets_total']}")
+
+
+@handler("region_minerals")
+def job_region_minerals(ctx):
+    region = _region_for(ctx)
+    _do_minerals(ctx, region, 0.0, 0.85)
+    region.build_mosaics(_scaled(ctx, 0.85, 1.0))
+
+
+@handler("region_aster")
+def job_region_aster(ctx):
+    region = _region_for(ctx)
+    res = region.import_aster(ctx.params["paths"], _scaled(ctx, 0.0, 0.3))
+    ctx.log(f"ASTER Quartz Index imported: {res['coverage'] * 100:.0f} % of the region covered")
+    _do_minerals(ctx, region, 0.3, 0.9)
+    region.build_mosaics(_scaled(ctx, 0.9, 1.0))
+
+
 @handler("region_gems")
 def job_region_gems(ctx):
     region = _region_for(ctx)
@@ -196,7 +232,7 @@ def job_region_label_units(ctx):
 
 @handler("region_pipeline")
 def job_region_pipeline(ctx):
-    """Acquire -> analytics -> gem prospectivity -> (train) -> classify -> mosaics, statistics, GeoJSON, PDF.
+    """Acquire -> analytics -> gems -> lineaments & minerals -> (train) -> classify -> products.
 
     Without a model and without training data the lithology step is skipped, but imagery,
     surface cover, alteration targets, landslide susceptibility and spectral units are produced.
@@ -205,15 +241,16 @@ def job_region_pipeline(ctx):
     _do_acquire(ctx, region, 0.0, 0.4)
     region.analyze(int(ctx.params.get("n_clusters", 10)), _scaled(ctx, 0.4, 0.5), ctx.log)
     _do_gems(ctx, region, 0.5, 0.55)
+    _do_minerals(ctx, region, 0.55, 0.62)
     model_id = ctx.params.get("model_id")
     if not model_id:
         feats, _counts = _training_features(ctx.db, region, ctx.job["region_id"])
         if feats:
-            model_id = _do_train(ctx, region, 0.55, 0.7)
+            model_id = _do_train(ctx, region, 0.62, 0.72)
         else:
             ctx.log("no model and no training data: skipping lithology classification")
     if model_id:
-        _do_classify(ctx, region, int(model_id), 0.7, 0.85)
+        _do_classify(ctx, region, int(model_id), 0.72, 0.85)
     _do_products(ctx, region, 0.85, 1.0)
 
 
@@ -313,11 +350,17 @@ def region_page(region_id):
     from ..gems import GEM_MODELS, GEM_NAMES
     gems = region.gems()
     products.update({n: (region.folder / "products" / n).exists() for n in ("gem_targets.csv", "gem_targets.geojson")})
+    from ..minerals import COMMODITY_NAMES, MINERAL_MODELS
+    minerals = region.minerals()
+    products.update({n: (region.folder / "products" / n).exists()
+                     for n in ("mineral_targets.csv", "mineral_targets.geojson", "lineaments.geojson")})
     return render_template("region.html", gems=gems, gem_models=GEM_MODELS, gem_names=GEM_NAMES,
+                           minerals=minerals, mineral_models=MINERAL_MODELS, commodity_names=COMMODITY_NAMES,
+                           min_occ=mineral_occurrences(db, region, region_id),
                            gem_occ=gem_occurrences(db, region, region_id), row=row, region=region, cfg=region.config, summary=region.summary(),
                            state=st, jobs=jobs, active=active, counts=counts, refs=refs, layers=layers,
                            products=products, models=models, stats=stats, analytics=analytics,
-                           insights=insights(stats, analytics, gems), hazard_classes=HAZARD_CLASSES,
+                           insights=insights(stats, analytics, gems, minerals), hazard_classes=HAZARD_CLASSES,
                            validation=validation, share_url=share_url,
                            districts=(region.folder / "districts.geojson").exists(),
                            version=st.get("mosaic_version", 0), algorithms=ALGORITHMS,
@@ -712,6 +755,106 @@ def region_gem_occurrences(region_id):
     except (ValueError, KeyError, UnicodeDecodeError, json.JSONDecodeError) as e:
         flash(f"Localities rejected: {e}", "error")
     return redirect(url_for("regions.region_page", region_id=region_id))
+
+
+@bp.route("/api/regions/<int:region_id>/mineral-targets")
+@requires("viewer")
+def api_region_mineral_targets(region_id):
+    return _targets(_region(_region_row(region_id)), "mineral_targets.geojson")
+
+
+@bp.route("/api/regions/<int:region_id>/lineaments")
+@requires("viewer")
+def api_region_lineaments(region_id):
+    return _targets(_region(_region_row(region_id)), "lineaments.geojson")
+
+
+@bp.route("/api/regions/<int:region_id>/mineral-occurrences")
+@requires("viewer")
+def api_region_mineral_occurrences(region_id):
+    region = _region(_region_row(region_id))
+    return jsonify({"type": "FeatureCollection", "features": [
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [o["lon"], o["lat"]]},
+         "properties": {"commodity": o.get("commodity"), "name": o.get("name"), "model": o.get("model"),
+                        "source": o.get("source", "upload")}} for o in mineral_occurrences(_db(), region, region_id)]})
+
+
+@bp.post("/regions/<int:region_id>/mineral-occurrences")
+@requires("analyst")
+def region_mineral_occurrences(region_id):
+    """Upload known mineral occurrences (CSV lat,lon,commodity,name or GeoJSON points)."""
+    from ..minerals import parse_occurrences
+    region = _region(_region_row(region_id))
+    if request.form.get("action") == "clear":
+        region.set_mineral_occurrences([])
+        audit("minerals.occurrences.clear", str(region_id))
+        flash("Known mineral occurrences removed.", "ok")
+        return redirect(url_for("regions.region_page", region_id=region_id))
+    up = request.files.get("file")
+    try:
+        if not up or not up.filename:
+            raise ValueError("choose a CSV or GeoJSON file")
+        occ = parse_occurrences(up.read(), up.filename)
+        if not occ:
+            raise ValueError("no points found (CSV needs lat, lon and commodity columns)")
+        existing = region.mineral_occurrences() if request.form.get("mode") == "append" else []
+        region.set_mineral_occurrences(existing + occ)
+        unknown = sorted({o["commodity"] for o in occ if not o["model"]})
+        audit("minerals.occurrences.upload", f"{region_id}: {len(occ)} points")
+        flash(f"{len(occ)} known mineral occurrences saved." + (f" Commodities without a model (kept, not "
+              f"validated): {', '.join(unknown)}" if unknown else "") +
+              " Run 'Lineaments & mineral prospectivity' to validate the maps with them.", "ok")
+    except (ValueError, KeyError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        flash(f"Occurrences rejected: {e}", "error")
+    return redirect(url_for("regions.region_page", region_id=region_id))
+
+
+@bp.post("/regions/<int:region_id>/aster")
+@requires("analyst")
+def region_aster(region_id):
+    """Upload ASTER thermal emissivity GeoTIFF(s) (AST_05 bands 10-14) -> Quartz Index -> vein model."""
+    row = _region_row(region_id)
+    region = _region(row)
+    files = [f for f in request.files.getlist("files") if f and f.filename]
+    if not files:
+        flash("Choose one or more ASTER emissivity GeoTIFFs (bands 10-14).", "error")
+        return redirect(url_for("regions.region_page", region_id=region_id))
+    folder = region.folder / "aster"
+    folder.mkdir(exist_ok=True)
+    paths = []
+    for f in files:
+        name = secure_filename(f.filename) or "aster.tif"
+        if not name.lower().endswith((".tif", ".tiff")):
+            flash(f"{name}: only GeoTIFF is accepted (convert HDF with QGIS or gdal_translate).", "error")
+            return redirect(url_for("regions.region_page", region_id=region_id))
+        f.save(folder / name)
+        paths.append(str(folder / name))
+    jid = current_app.extensions["rockmap_submit"]("region_aster", {"paths": paths}, region_id=region_id)
+    audit("minerals.aster.upload", f"{region_id}: {len(paths)} files")
+    flash(f"{len(paths)} ASTER file(s) uploaded; Quartz Index and mineral maps are being computed.", "ok")
+    return redirect(url_for("regions.region_page", region_id=region_id, job=jid))
+
+
+@bp.route("/regions/<int:region_id>/mineral_targets.<fmt>")
+@requires("viewer")
+def region_mineral_targets_file(region_id, fmt):
+    if fmt not in ("csv", "geojson"):
+        abort(404)
+    p = _region(_region_row(region_id)).folder / "products" / f"mineral_targets.{fmt}"
+    if not p.exists():
+        abort(404)
+    return Response(p.read_bytes(), mimetype="text/csv" if fmt == "csv" else "application/geo+json",
+                    headers={"Content-Disposition": f"attachment; filename=region{region_id}_mineral_targets.{fmt}"})
+
+
+@bp.route("/regions/<int:region_id>/lineaments.geojson")
+@requires("viewer")
+def region_lineaments_file(region_id):
+    p = _region(_region_row(region_id)).folder / "products" / "lineaments.geojson"
+    if not p.exists():
+        abort(404)
+    return Response(p.read_bytes(), mimetype="application/geo+json",
+                    headers={"Content-Disposition": f"attachment; filename=region{region_id}_lineaments.geojson"})
 
 
 @bp.route("/regions/<int:region_id>/gem_targets.<fmt>")

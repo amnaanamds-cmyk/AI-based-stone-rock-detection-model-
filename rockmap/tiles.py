@@ -79,7 +79,8 @@ def _pick_level(path: Path, tile_px_m: float) -> int:
 
 def render_tile(mosaic: Path, layer: str, z: int, x: int, y: int) -> bytes:
     """PNG bytes of one XYZ tile of a region mosaic (transparent outside data)."""
-    categorical = layer in ("lithology", "surface", "hazard", "clusters", "alteration") or layer.startswith("gem")
+    categorical = layer in ("lithology", "surface", "hazard", "clusters", "alteration", "lineaments") or \
+        layer.startswith(("gem", "min"))
     rs = Resampling.nearest if categorical else Resampling.bilinear
     left, bottom, right, top = tile_bounds(z, x, y)
     full, _ = _open(mosaic, -1)
@@ -94,8 +95,11 @@ def render_tile(mosaic: Path, layer: str, z: int, x: int, y: int) -> bytes:
         with WarpedVRT(src, crs="EPSG:3857", transform=dst_transform, width=TILE, height=TILE,
                        resampling=rs, src_nodata=0, nodata=0) as vrt:
             data = vrt.read()
-    if layer.startswith("gem"):
+    if layer.startswith("gem") or layer.startswith("min"):
         rgba = _gem_rgba(layer, data[0])
+    elif layer == "lineaments":
+        rgba = np.zeros((TILE, TILE, 4), np.uint8)
+        rgba[data[0] > 0] = (20, 20, 20, 230)       # strike-coded pixels drawn as dark lines
     elif layer in ("alteration", "hazard", "clusters"):
         rgba = _analytics_rgba(layer, data[0])
     elif categorical:
@@ -150,8 +154,11 @@ def _analytics_rgba(layer: str, v: np.ndarray) -> np.ndarray:
 def _gem_rgba(layer: str, v: np.ndarray) -> np.ndarray:
     """Gem prospectivity: transparent below 50, then the model colour growing more opaque to 100."""
     from .gems import MODEL_BY_KEY
-    key = layer[4:] if layer.startswith("gem_") else ""
-    color = MODEL_BY_KEY[key].color if key in MODEL_BY_KEY else ("#e6550d" if key == "ml" else "#c51b8a")
+    from .minerals import MODEL_BY_KEY as MINERAL_BY_KEY
+    key = layer[4:] if layer.startswith(("gem_", "min_")) else ""
+    models = MINERAL_BY_KEY if layer.startswith("min") else MODEL_BY_KEY
+    color = models[key].color if key in models else ("#e6550d" if key == "ml" else
+                                                    "#8c510a" if layer == "minerals" else "#c51b8a")
     c = color.lstrip("#")
     rgb = [int(c[i:i + 2], 16) for i in (0, 2, 4)]
     score = v.astype(np.float32) - 1

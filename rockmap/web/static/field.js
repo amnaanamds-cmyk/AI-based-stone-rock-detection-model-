@@ -67,11 +67,11 @@
   form.addEventListener("submit", function (ev) {
     ev.preventDefault();
     downscale(form.photo.files[0]).then(function (photo) {
-      var obs = { lat: form.lat.value, lon: form.lon.value, accuracy_m: form.accuracy_m.value, class_id: form.class_id.value, gem: form.gem ? form.gem.value : "",
+      var obs = { lat: form.lat.value, lon: form.lon.value, accuracy_m: form.accuracy_m.value, class_id: form.class_id.value, gem: form.gem ? form.gem.value : "", commodity: form.commodity ? form.commodity.value : "",
         certainty: (form.querySelector("[name=certainty]:checked") || {}).value || 2, note: form.note.value,
         region_id: form.region_id.value, observed_at: new Date().toISOString(), photo_data: photo };
       var q = queue(); q.push(obs); saveQueue(q);
-      form.note.value = ""; form.photo.value = ""; if (form.gem) form.gem.value = "";
+      form.note.value = ""; form.photo.value = ""; if (form.gem) form.gem.value = ""; if (form.commodity) form.commodity.value = "";
       sync().then(function () { showQueue(queue().length ? null : "Saved and uploaded."); });
     });
   });

@@ -69,7 +69,7 @@ def observations_geojson(rows: list[dict]) -> dict:
         {"type": "Feature", "geometry": {"type": "Point", "coordinates": [o["lon"], o["lat"]]},
          "properties": {"id": o["id"], "class_id": o["class_id"], "class": ALL_CLASSES[o["class_id"]].name,
                         "color": ALL_CLASSES[o["class_id"]].color, "certainty": o["certainty"], "note": o["note"],
-                        "gem": o.get("gem"),
+                        "gem": o.get("gem"), "commodity": o.get("commodity"),
                         "author": o["author"], "observed_at": o["observed_at"] or o["created"],
                         "photo": url_for("files", relpath=o["photo"]) if o["photo"] else None}}
         for o in rows]}
@@ -79,7 +79,9 @@ def observations_geojson(rows: list[dict]) -> dict:
 @requires("viewer")
 def field_page():
     from ..gems import GEM_NAMES
+    from ..minerals import COMMODITY_NAMES
     return render_template("field.html", classes=ROCK_CLASSES, regions=_db().all("regions"), gem_names=GEM_NAMES,
+                           commodity_names=COMMODITY_NAMES,
                            recent=_db().all("observations", "author = ?", (g.user["username"],), limit=15))
 
 
@@ -136,11 +138,15 @@ def api_observations():
     gem = str(d.get("gem") or "").strip().lower() or None
     if gem is not None and gem not in GEM_NAMES:
         return jsonify(error=f"unknown gem '{gem}' (use one of: {', '.join(GEM_NAMES)})"), 400
+    from ..minerals import COMMODITY_TYPES
+    commodity = str(d.get("commodity") or "").strip().lower() or None
+    if commodity is not None and commodity not in COMMODITY_TYPES:
+        return jsonify(error=f"unknown commodity '{commodity}'"), 400
     region_id = int(d["region_id"]) if str(d.get("region_id") or "").isdigit() else region_for_point(lon, lat)
     acc = d.get("accuracy_m")
     oid = db.insert("observations", region_id=region_id, lat=lat, lon=lon,
                     accuracy_m=float(acc) if acc not in (None, "", "null") else None, class_id=cid,
-                    certainty=certainty, note=(d.get("note") or "")[:1000], gem=gem,
+                    certainty=certainty, note=(d.get("note") or "")[:1000], gem=gem, commodity=commodity,
                     observed_at=(d.get("observed_at") or "")[:32] or None, author=g.user["username"])
     photo = request.files.get("photo")
     try:

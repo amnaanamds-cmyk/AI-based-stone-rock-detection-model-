@@ -228,7 +228,7 @@ def cmd_region_report(a):
     districts = json.loads(Path(a.districts).read_text(encoding="utf-8")) if a.districts else None
     model = a.model or r.state().get("model")
     print(region_report(r, a.out, load_meta(model) if model else None, r.statistics(districts, a.name_field),
-                        a.organisation))
+                        a.organisation, analytics=r.analytics(), gems=r.gems(), minerals=r.minerals()))
 
 
 def cmd_region_query(a):
@@ -249,6 +249,31 @@ def cmd_region_analyze(a):
     from .analytics import HAZARD_CLASSES
     print("Landslide susceptibility (km2): " + ", ".join(
         f"{HAZARD_CLASSES[int(k)][0]} {v:,.1f}" for k, v in res["hazard_km2"].items()))
+
+
+def cmd_region_minerals(a):
+    from .minerals import parse_occurrences
+    r = _region(a)
+    if a.aster:
+        print(f"ASTER Quartz Index: {r.import_aster(a.aster, _progress)}")
+    occ = None
+    if a.occurrences:
+        p = Path(a.occurrences)
+        occ = parse_occurrences(p.read_bytes(), p.name)
+        r.set_mineral_occurrences(occ)
+    res = r.mineral_analysis(occ, _progress)
+    ln = res["lineaments"]
+    print(f"\n{ln['segments']} lineaments ({ln['total_km']:.0f} km); {res['targets_total']} mineral target zones")
+    for m in res["models"]:
+        v = m["validation"]
+        val = f"  validation: AUC {v['auc']:.2f}, {v['top20'] * 100:.0f}% of {v['n']} in top 20%" if v.get("n") else ""
+        print(f"  {m['name']:38s} {m['targets']:3d} zones{val}")
+    for t in res["targets_top"][:10]:
+        print(f"  #{t['id']:<4d} {t['lat']:.5f}N {t['lon']:.5f}E  {t['model_name']:38s} score {t['mean_score']:5.1f} "
+              f"{t['area_ha']:6.1f} ha")
+    if res.get("ml"):
+        print(f"Data-driven model: {res['ml']}")
+    r.build_mosaics()
 
 
 def cmd_region_gems(a):
@@ -515,6 +540,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--units", type=int, default=10, help="number of spectral units (2-16)")
     s = rarg("gems", "gemstone prospectivity (ruby, aquamarine, topaz, emerald, peridot ...)", cmd_region_gems)
     s.add_argument("--occurrences", help="known gem localities: CSV (lat,lon,gem,name) or GeoJSON points")
+    s = rarg("minerals", "structural lineaments + iron / copper / quartz-vein prospectivity", cmd_region_minerals)
+    s.add_argument("--occurrences", help="known mineral occurrences: CSV (lat,lon,commodity,name) or GeoJSON points")
+    s.add_argument("--aster", nargs="+", help="ASTER emissivity GeoTIFF(s), bands 10-14 (adds the thermal Quartz Index)")
     s = rarg("label-units", "turn spectral units into a lithology map", cmd_region_label_units)
     s.add_argument("assign", nargs="+", help="UNIT=CLASS pairs, e.g. 1=4 2=7 3=6")
     s = rarg("mosaic", "build region-wide GeoTIFF mosaics with overviews", cmd_region_mosaic)

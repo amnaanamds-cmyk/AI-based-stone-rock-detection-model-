@@ -21,9 +21,11 @@
   <input type="hidden" id="accuracy_m" name="accuracy_m">
   <label for="class_id">Rock type observed</label>
   <select id="class_id" name="class_id" required>{% for c in classes %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select>
-  <label for="gem">Gem / mineral found here (optional)</label>
+  <label for="gem">Gem found here (optional)</label>
   <select id="gem" name="gem"><option value="">— none —</option>{% for g in gem_names %}<option value="{{ g }}">{{ g|capitalize }}</option>{% endfor %}</select>
-  <p class="hint">Gem finds become known localities that validate and train the gem prospectivity maps.</p>
+  <label for="commodity">Mineral occurrence here (optional)</label>
+  <select id="commodity" name="commodity"><option value="">— none —</option>{% for c in commodity_names %}<option value="{{ c }}">{{ c|capitalize }}</option>{% endfor %}</select>
+  <p class="hint">Gem finds and mineral showings become known occurrences that validate and train the prospectivity maps.</p>
   <label>Certainty</label>
   <div class="row"><label class="check"><input type="radio" name="certainty" value="1"> unsure</label>
   <label class="check"><input type="radio" name="certainty" value="2" checked> probable</label>
@@ -39,7 +41,7 @@
 {% endif %}
 <div class="card" style="margin-top: 12px">
   <h2>My recent observations</h2>
-  {% for o in recent %}<p style="margin: 4px 0"><span class="swatch" style="background: {{ class_by_id[o.class_id].color }}"></span>{{ class_by_id[o.class_id].name }}{% if o.gem %} · 💎 {{ o.gem }}{% endif %} <span class="muted mono">{{ '%.5f' % o.lat }}, {{ '%.5f' % o.lon }} · {{ o.created[5:16] }}{{ ' · 📷' if o.photo }}</span></p>
+  {% for o in recent %}<p style="margin: 4px 0"><span class="swatch" style="background: {{ class_by_id[o.class_id].color }}"></span>{{ class_by_id[o.class_id].name }}{% if o.gem %} · 💎 {{ o.gem }}{% endif %}{% if o.commodity %} · ⛏ {{ o.commodity }}{% endif %} <span class="muted mono">{{ '%.5f' % o.lat }}, {{ '%.5f' % o.lon }} · {{ o.created[5:16] }}{{ ' · 📷' if o.photo }}</span></p>
   {% else %}<p class="empty">None yet.</p>{% endfor %}
 </div>
 {% endblock %}
