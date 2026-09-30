@@ -34,7 +34,7 @@ Google Earth is excellent to *look at*, but it cannot be used for rock or minera
 | **Spectral bands** | Only red, green and blue: a photograph | 13 bands, including **near-infrared and two short-wave-infrared (SWIR) bands** |
 | **Rock / mineral information** | Colour only. Different rocks with similar colours cannot be told apart. | Clay, carbonate (marble), iron-oxide, mafic and Mg-OH minerals leave fingerprints in SWIR. These fingerprints are what the AI classifier, alteration targets and gem models use. |
 | **Calibration** | A mosaic of different dates, satellites and colour-balanced aerial photos | Calibrated surface reflectance, with the same physics everywhere |
-| **Updates** | Irregular; many GB areas are years old | A new image every 5 days, and RockMap builds cloud- and snow-free composites from 2023–2025 |
+| **Updates** | Irregular; many GB areas are years old | A new image every 5 days, and RockMap builds cloud- and snow-free composites from the **last three years**, newest scenes first |
 | **Resolution** | Sharper (0.3–15 m) | 10–20 m, enough for rock formations, alteration zones and marble or pegmatite belts |
 
 The dashboard **does** show high-resolution satellite photos as a *background* to help you recognise places. Use the layer switcher (top right of the map) and choose **Esri World Imagery** or **OpenStreetMap**. This background is for display only; the analysis always runs on Sentinel-2.

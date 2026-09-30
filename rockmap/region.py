@@ -32,7 +32,7 @@ from rasterio.warp import transform as warp_transform
 from rasterio.warp import transform_geom
 from rasterio.windows import Window
 
-from .acquisition import (S2Catalog, Season, build_composite, fetch_dem, read_local_to_grid, utm_epsg,
+from .acquisition import (S2Catalog, Season, build_composite, fetch_dem, read_local_to_grid, recent_years, utm_epsg,
                           write_composite)
 from .config import ALGORITHM_LABELS, ALGORITHMS, CLASS_IDS, CLOUD_CLASS, class_name, hex_to_rgb, ALL_CLASSES
 from .features import build_features
@@ -61,7 +61,7 @@ class RegionConfig:
     resolution: float = 20.0                    # metres
     tile_size: int = 1024                       # pixels (1024 x 20 m = 20.48 km)
     source: str = "sentinel2"                   # "sentinel2" (AWS, automatic) or "local"
-    years: list = field(default_factory=lambda: [2023, 2024, 2025])
+    years: list = field(default_factory=recent_years)   # last 3 years incl. the current one
     months: list = field(default_factory=lambda: [7, 8, 9, 10])
     max_cloud: float = 30.0
     max_scenes: int = 6

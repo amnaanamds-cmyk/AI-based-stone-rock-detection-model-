@@ -171,10 +171,17 @@ class S2Item:
         return self.datetime[:10]
 
 
+def recent_years(n: int = 3) -> list[int]:
+    """The last ``n`` years up to and including the current one (e.g. 2024-2026 in 2026)."""
+    import datetime
+    this = datetime.date.today().year
+    return list(range(this - n + 1, this + 1))
+
+
 @dataclass
 class Season:
     """Acquisition window: years and months (late summer = least snow in the Karakoram)."""
-    years: Sequence[int] = (2023, 2024, 2025)
+    years: Sequence[int] = field(default_factory=recent_years)
     months: Sequence[int] = (7, 8, 9, 10)
     max_cloud: float = 30.0
 
@@ -262,7 +269,8 @@ class S2Catalog:
         return items
 
     def search(self, bbox: Sequence[float], season: Season) -> list[S2Item]:
-        """Scenes intersecting ``bbox`` (lon/lat) in the season, sorted by cloud cover."""
+        """Scenes intersecting ``bbox`` (lon/lat) in the season: clearest first and, among
+        similarly clear scenes (5 % cloud steps), the newest first, so composites stay current."""
         items: list[S2Item] = []
         if self._stac_ok is not False:
             try:
@@ -281,7 +289,7 @@ class S2Catalog:
         best: dict = {}
         for it in sorted(items, key=lambda i: i.cloud_cover):
             best.setdefault((it.mgrs or it.id.split("_")[1], it.date), it)
-        return sorted(best.values(), key=lambda i: i.cloud_cover)
+        return sorted(best.values(), key=lambda i: (int(i.cloud_cover // 5), -int(i.date.replace("-", "") or 0)))
 
 
 # ---------------------------------------------------------------------------

@@ -136,3 +136,11 @@ def test_build_composite_covers_every_granule():
     assert any("43SEA" in i for i in rep.items)
     assert rep.clear_fraction == pytest.approx(1.0) and (stack[6] == 4).all()
     assert len(rep.items) <= 6                          # stops once both granules are covered (2 each)
+
+
+def test_default_season_is_current():
+    import datetime
+    from rockmap.acquisition import recent_years
+    this = datetime.date.today().year
+    assert recent_years() == [this - 2, this - 1, this]
+    assert list(Season().years) == recent_years()

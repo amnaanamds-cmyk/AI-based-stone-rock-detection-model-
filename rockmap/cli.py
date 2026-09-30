@@ -157,6 +157,7 @@ def cmd_presets(a):
 
 
 def cmd_region_create(a):
+    from .acquisition import recent_years
     from .presets import PRESETS
     from .region import Region, RegionConfig, load_geojson_geometry
     if a.preset:
@@ -167,7 +168,7 @@ def cmd_region_create(a):
         sys.exit("give --preset or --aoi")
     res = a.resolution or (PRESETS[a.preset].get("resolution", 20.0) if a.preset else 20.0)
     cfg = RegionConfig(name=name, aoi=geom, resolution=res, tile_size=a.tile_size,
-                       years=a.years, months=a.months, max_cloud=a.max_cloud, max_scenes=a.max_scenes,
+                       years=a.years or recent_years(), months=a.months, max_cloud=a.max_cloud, max_scenes=a.max_scenes,
                        source="local" if a.local_scenes else "sentinel2", local_scenes=a.local_scenes or [],
                        local_sensor=a.local_sensor, local_dem=a.local_dem)
     r = Region.create(a.out, cfg)
@@ -477,7 +478,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--out", required=True, help="region folder")
     s.add_argument("--resolution", type=float, default=None, help="metres (default: 20, or the preset's own)")
     s.add_argument("--tile-size", type=int, default=1024)
-    s.add_argument("--years", type=int, nargs="+", default=[2023, 2024, 2025])
+    s.add_argument("--years", type=int, nargs="+", default=None, help="default: the last 3 years incl. this one")
     s.add_argument("--months", type=int, nargs="+", default=[7, 8, 9, 10], help="7-10 = least snow")
     s.add_argument("--max-cloud", type=float, default=30.0)
     s.add_argument("--max-scenes", type=int, default=6, help="scenes per tile composite")

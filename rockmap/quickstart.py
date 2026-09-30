@@ -159,11 +159,12 @@ def _gb_overview(db, root: Path, progress: Callable) -> None:
 
 
 def _real_region(db, root: Path, progress: Callable) -> None:
+    from .acquisition import recent_years
     from .presets import PRESETS
     from .region import RegionConfig
     progress(0.0, "Creating real Gilgit region (downloads Sentinel-2 + Copernicus DEM)")
     p = PRESETS["gilgit"]
-    cfg = RegionConfig(name=REAL_NAME, aoi=p["geometry"], years=[2023, 2024], max_scenes=4)
+    cfg = RegionConfig(name=REAL_NAME, aoi=p["geometry"], years=recent_years(2), max_scenes=4)
     rid = _new_region(db, root, REAL_NAME, cfg, "gilgit")
     _run(db, root, "region_pipeline", {"n_clusters": 10, "geojson": False}, region_id=rid)
     progress(1.0, "Real Gilgit region complete")

@@ -13,6 +13,7 @@ from flask import (Blueprint, Response, abort, current_app, flash, g, jsonify, r
 from werkzeug.utils import secure_filename
 
 from ..config import ALGORITHM_LABELS, ALGORITHMS, ALL_CLASSES, CLASS_IDS, CLOUD_CLASS, ROCK_CLASSES
+from ..acquisition import recent_years
 from ..presets import PRESETS
 from ..region import Region, RegionConfig, load_geojson_geometry
 from .auth import audit, has_role, requires
@@ -233,7 +234,8 @@ def regions_page():
 @requires("analyst")
 def region_new():
     if request.method == "GET":
-        return render_template("region_new.html", presets=PRESETS)
+        return render_template("region_new.html", presets=PRESETS,
+                               default_years=" ".join(map(str, recent_years())))
     f = request.form
     try:
         preset = f.get("preset") or None
@@ -252,7 +254,7 @@ def region_new():
             if preset not in PRESETS:
                 raise ValueError("choose a preset area")
             geom = PRESETS[preset]["geometry"]
-        years = sorted({int(y) for y in f.get("years", "2023 2024 2025").replace(",", " ").split()})
+        years = sorted({int(y) for y in (f.get("years") or " ".join(map(str, recent_years()))).replace(",", " ").split()})
         months = sorted({int(m) for m in f.get("months", "7 8 9 10").replace(",", " ").split() if 1 <= int(m) <= 12})
         source = f.get("source", "sentinel2")
         local = [s.strip() for s in f.get("local_scenes", "").splitlines() if s.strip()]

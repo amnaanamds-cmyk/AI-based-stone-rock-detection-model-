@@ -37,7 +37,7 @@
     <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 10px">
       <div><label for="resolution">Resolution (m)</label><input type="number" name="resolution" id="resolution" value="20" min="10" max="1000"></div>
       <div><label for="tile_size">Tile size (px)</label><input type="number" name="tile_size" id="tile_size" value="1024" min="128" max="4096" step="128"></div>
-      <div><label for="years">Years</label><input type="text" name="years" id="years" value="2023 2024 2025"></div>
+      <div><label for="years">Years</label><input type="text" name="years" id="years" value="{{ default_years }}"></div>
       <div><label for="months">Months</label><input type="text" name="months" id="months" value="7 8 9 10"></div>
       <div><label for="max_cloud">Max. cloud %</label><input type="number" name="max_cloud" id="max_cloud" value="30" min="1" max="100"></div>
       <div><label for="max_scenes">Scenes per tile</label><input type="number" name="max_scenes" id="max_scenes" value="6" min="1" max="20"></div>

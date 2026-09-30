@@ -48,7 +48,7 @@ Tips for good results:
 | Classify | *3 · Classify* | `rockmap region classify regions/gb --model models/gb` |
 | Products | *4 · Build products* | `rockmap region mosaic regions/gb` · `stats` · `export` · `report` |
 
-The season defaults to **July–October of 2023–2025**, when seasonal snow cover is smallest. Up to 6 of the least-cloudy scenes per tile are combined. Permanent snowfields and glaciers are mapped as *Snow / Glacier / Ice* instead of being guessed.
+The season defaults to **July–October of the last three years** (for example 2024–2026 in 2026), when seasonal snow cover is smallest. Up to 6 of the least-cloudy scenes per tile are combined. Permanent snowfields and glaciers are mapped as *Snow / Glacier / Ice* instead of being guessed.
 
 ## 4. Check the results
 

@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2.4.0: whole-region map
+- Imagery is always current: the default season is the last three years including the current one (for example 2024–2026), and among similarly clear scenes the newest are used first.
 - Whole-Gilgit-Baltistan overview at 100 m (`run.sh --gb` / `run.bat --gb`, preset *Gilgit-Baltistan overview map*): a complete real map in under an hour.
 - Composites now cover every Sentinel-2 granule of large tiles (candidates round-robin per granule) and measure coverage inside the area of interest. Memory is bounded: a scene cap per tile and float16 storage.
 - docs/SATELLITE_DATA.md: where the imagery comes from, and why Google Earth imagery cannot be used.
