@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rockmap"
-version = "2.6.0"
+version = "2.7.0"
 description = "AI-Based Satellite Rock/Stone Detection and Geological Mapping System"
 readme = "README.md"
 requires-python = ">=3.9"

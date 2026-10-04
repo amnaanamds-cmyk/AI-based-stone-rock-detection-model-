@@ -241,3 +241,24 @@ def landcover_mask(refl: np.ndarray, cos_i: Optional[np.ndarray] = None,
         out[s == 11] = SNOW_CLASS
         out[s == 6] = WATER_CLASS
     return out
+
+
+def detect_sensor(path) -> str:
+    """Guess how pixel values of an image file map to reflectance (used by training and prediction).
+
+    * floating-point values up to ~1.5  -> ``reflectance`` (already 0-1)
+    * integer values (e.g. 0-10000)     -> ``sentinel2_composite`` (reflectance x 10000, no offset;
+      RockMap region stacks, most exported Sentinel-2 / Landsat products)
+
+    Raw Sentinel-2 L2A bands with the -1000 offset (processing baseline >= 04.00) cannot be told
+    apart from the pixel values alone: set ``"sensor": "sentinel2"`` in the dataset's ``area.json``.
+    """
+    import rasterio
+    with rasterio.open(path) as src:
+        step = max(1, max(src.width, src.height) // 256)
+        sample = src.read(1, out_shape=(max(1, src.height // step), max(1, src.width // step))).astype(np.float64)
+        is_float = np.dtype(src.dtypes[0]).kind == "f"
+    v = sample[np.isfinite(sample) & (sample > 0)]
+    if is_float and (not v.size or np.percentile(v, 99) <= 1.5):
+        return "reflectance"
+    return "sentinel2_composite"

@@ -1,5 +1,5 @@
 {% from "_macros.html" import metrics_table, benchmark %}
-{% set mfiles = url_for('files', relpath=(model.folder if model else job.folder)) %}
+{% if model and model.source == 'training_module' %}{% set mfiles = url_for('trained_model_file', version=model.version) %}{% else %}{% set mfiles = url_for('files', relpath=(model.folder if model else job.folder)) %}{% endif %}
 <div class="card" style="margin-bottom: 16px">
   <div class="row"><h2 style="margin: 0">Benchmark on held-out spatial test blocks</h2><span class="spacer"></span>
   {% if model and scene %}<a class="btn small" href="{{ url_for('scene_page', scene_id=scene.id) }}">Use this model to classify →</a>{% endif %}</div>

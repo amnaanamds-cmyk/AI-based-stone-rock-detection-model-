@@ -62,6 +62,8 @@ CREATE TABLE IF NOT EXISTS models (
     best_algo TEXT,
     summary   TEXT,
     created_by TEXT,
+    source    TEXT,
+    version   TEXT,
     created   TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS jobs (
@@ -129,7 +131,7 @@ MIGRATIONS = {
     "regions": {"share_token": "TEXT"},
     "users": {"must_change": "INTEGER NOT NULL DEFAULT 0"},
     "observations": {"gem": "TEXT", "commodity": "TEXT"},
-    "models": {"region_id": "INTEGER", "created_by": "TEXT"},
+    "models": {"region_id": "INTEGER", "created_by": "TEXT", "source": "TEXT", "version": "TEXT"},
     "jobs": {"region_id": "INTEGER", "user": "TEXT", "worker": "TEXT", "cancel": "INTEGER NOT NULL DEFAULT 0",
              "attempts": "INTEGER NOT NULL DEFAULT 0", "heartbeat": "REAL", "started": "TEXT"},
 }

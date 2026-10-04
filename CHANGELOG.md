@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.7.0: stand-alone training module
+- `training/`: dataset discovery and checks (`dataset.py`), preprocessing shared with prediction and cached in `dataset/processed` (`preprocessing.py`), all settings in `config.py`, `train.py` (check, preprocess, train CNN / RF / SVM, evaluate, save, activate), `evaluate.py` (reports; independent-area test) and `models.py` (list / info / use / delete).
+- Versioned models in `models/trained/model_vN` with `current.json`; versions are never overwritten. Rollback with `python training/models.py use model_v1`.
+- `prediction/predict.py`: inference only (`Predictor` and CLI), using the current model and the preprocessing stored in `meta.json`.
+- Web application: registers the current training-module model automatically (picks up new versions without a restart), shows its report and sample-data flag, never deletes its files, and uses it in the region pipeline when no other model or training data exists and it was trained on real data.
+- `python app.py` starts the application. `training/make_sample_dataset.py` creates a clearly flagged synthetic sample area.
+- Dataset format guide in `dataset/README.md`; training guide (retraining, new classes, architecture changes) in `training/README.md`.
+
 ## 2.6.0: hyperspectral, VHR imagery, GeoPackage
 - Hyperspectral mineral mapping (EnMAP, PRISMA, ...) by diagnostic absorption features: alunite, kaolinite, sericite, chlorite, calcite, jarosite, hematite and goethite. Optional Spectral Angle Mapper against a user spectral library. Processing is block-wise, and the copper and iron models use the results where scenes exist.
 - Very-high-resolution imagery (WorldView-3, Pleiades, SuperView) as a base map at native resolution (up to zoom 19).

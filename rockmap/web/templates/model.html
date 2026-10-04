@@ -3,6 +3,8 @@
 {% block content %}
 <h1>{{ model.name }}</h1>
 <p class="sub">Created {{ meta.created }} · sensor preset <span class="mono">{{ meta.sensor }}</span> · CNN patch {{ meta.patch_size }}×{{ meta.patch_size }} · spatial blocks {{ meta.block_size }} px</p>
+{% if meta.sample_data %}<div class="flash error">Trained on <b>synthetic sample data</b> (training/make_sample_dataset.py): a demonstration of the pipeline, not a model of real geology.</div>{% endif %}
+{% if model.source == 'training_module' %}<p class="hint">From the training module: <span class="mono">{{ model.folder }}</span> · data: {{ meta.dataset|map(attribute='name')|join(', ') }} · <a href="{{ url_for('trained_model_file', version=model.version, name='evaluation.txt') }}">evaluation report</a></p>{% endif %}
 {% set job = none %}{% set scene = none %}
 {% include "_training.html" %}
 <div class="card" style="margin-top: 16px">

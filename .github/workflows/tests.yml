@@ -28,6 +28,16 @@ jobs:
           pip install -e ".[dev]"
       - name: Unit, integration and acceptance tests
         run: pytest -q
+      - name: Training module (the documented commands)
+        run: |
+          python training/make_sample_dataset.py --size 128
+          python training/train.py --check
+          python training/train.py --models cnn rf --epochs 2 --samples 300
+          python training/train.py --models rf --samples 300
+          python training/models.py list
+          python training/models.py use model_v1
+          python prediction/predict.py dataset/raw/sample_synthetic/image.tif --dem dataset/raw/sample_synthetic/dem.tif --out ci-results
+          test -f ci-results/classified.tif
       - name: Installation self-check
         run: rockmap doctor --offline --data ci-data
       - name: Server smoke test

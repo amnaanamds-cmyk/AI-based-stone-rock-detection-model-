@@ -148,9 +148,10 @@ class SampleCollector:
     SPLITS = ("train", "val", "test")
 
     def __init__(self, per_class: int = DEFAULT_SAMPLES_PER_CLASS, block_size: int = DEFAULT_BLOCK_SIZE,
-                 patches: bool = True, seed: int = 0):
+                 patches: bool = True, seed: int = 0, fractions: Sequence[float] = (0.6, 0.15, 0.25)):
         self.per_class = per_class
         self.block_size = block_size
+        self.fractions = tuple(fractions)
         self.patches = patches
         self.seed = seed
         self.parts: dict[str, list] = {s: [] for s in self.SPLITS}
@@ -170,7 +171,7 @@ class SampleCollector:
         elif list(names) != self.feature_names:
             raise ValueError("All tiles must provide the same features (DEM present everywhere or nowhere)")
         seed = self.seed + 7919 * self.n_sources
-        split = block_split(labels.shape, self.block_size, seed=seed)
+        split = block_split(labels.shape, self.block_size, self.fractions, seed=seed)
         margin = DEFAULT_PATCH_SIZE // 2
         caps = self.caps(share)
         added = 0
@@ -205,8 +206,10 @@ class SampleCollector:
 
 def fit_bundle(collector: SampleCollector, out_dir, algorithms: Sequence[str], meta: dict,
                epochs: int = 30, seed: int = 0, progress: Progress = _noop,
-               base: float = 0.1, span: float = 0.9) -> dict:
-    """Fit the normaliser and every requested classifier on collected samples, save the bundle."""
+               base: float = 0.1, span: float = 0.9, cnn_options: Optional[dict] = None) -> dict:
+    """Fit the normaliser and every requested classifier on collected samples, save the bundle.
+
+    ``cnn_options`` may set ``batch_size``, ``lr`` and ``width`` of the CNN."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     x_train, p_train, y_train = collector.arrays("train")
@@ -238,7 +241,7 @@ def fit_bundle(collector: SampleCollector, out_dir, algorithms: Sequence[str], m
         if algo == "cnn":
             if not collector.patches:
                 raise ValueError("CNN requested but patches were not collected")
-            model = CNNClassifier(len(names), classes, epochs=epochs, seed=seed)
+            model = CNNClassifier(len(names), classes, epochs=epochs, seed=seed, **(cnn_options or {}))
 
             def cb(ep, total, rec, b=b, sp=sp):
                 msg = f"CNN epoch {ep}/{total}  loss {rec['loss']:.3f}  train acc {rec['train_acc']:.3f}"

@@ -15,3 +15,11 @@ outputs/
 *.pt
 *.joblib
 !docs/images/*.png
+# training module: your dataset, its preprocessing cache and trained model versions stay local
+dataset/raw/*
+!dataset/raw/.gitkeep
+dataset/processed/*
+!dataset/processed/.gitkeep
+models/trained/*
+!models/trained/.gitkeep
+results/

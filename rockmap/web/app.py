@@ -197,8 +197,20 @@ def create_app(root: Optional[Path] = None, sync_jobs: bool = False, workers: Op
     app.extensions["rockmap_submit"] = submit
 
     # ------------------------------------------------------------------ request hooks
+    from .trained import is_training_module, sync_trained_model
+
+    def sync_models(force=False):
+        try:
+            return sync_trained_model(db, force)
+        except (OSError, ValueError, KeyError) as e:      # a broken model folder must not break the app
+            logging.getLogger(__name__).warning("trained model not loaded: %s", e)
+            return None
+    sync_models(force=True)
+    app.extensions["rockmap_sync_models"] = sync_models
+
     @app.before_request
     def before():
+        sync_models()
         auth.load_user()
         auth.check_csrf()
         return auth.require_password_change()
@@ -519,11 +531,25 @@ def create_app(root: Optional[Path] = None, sync_jobs: bool = False, workers: Op
     @requires("admin")
     def delete_model(model_id):
         model = db.get("models", model_id) or abort(404)
+        if is_training_module(model):
+            flash("Models from the training module are managed with: python training/models.py "
+                  "(list / use / delete). Nothing was deleted.", "error")
+            return redirect(url_for("models_page"))
         shutil.rmtree(root / model["folder"], ignore_errors=True)
         db.delete("models", model_id)
         audit("model.delete", model["name"])
         flash("Model deleted.", "ok")
         return redirect(url_for("models_page"))
+
+    @app.route("/trained-models/<version>")
+    @app.route("/trained-models/<version>/<name>")
+    @requires("viewer")
+    def trained_model_file(version, name=None):
+        """Confusion matrices and reports of training-module models (models/trained/<version>/)."""
+        from .. import model_store
+        if not name or version not in model_store.versions() or not name.endswith((".png", ".txt", ".json")):
+            abort(404)
+        return send_from_directory(model_store.models_dir() / version, name)
 
     @app.route("/about")
     @requires("viewer")

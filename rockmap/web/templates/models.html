@@ -2,7 +2,7 @@
 {% block title %}Models{% endblock %}
 {% block content %}
 <h1>Trained models</h1>
-<p class="sub">Each model bundle contains a CNN and/or the Random Forest and SVM benchmarks trained on the same samples.</p>
+<p class="sub">Each model bundle contains a CNN and/or the Random Forest and SVM benchmarks trained on the same samples. Models marked <b>training module</b> come from <span class="mono">python training/train.py</span> (folder <span class="mono">models/trained/</span>); the one marked <i>current</i> is used by default. Switch versions with <span class="mono">python training/models.py use model_vN</span>.</p>
 <div class="card">
 {% if models %}
 <div class="table-wrap"><table>
@@ -12,7 +12,7 @@
     <td>{% for a, s in m.summary.items() %}<span class="badge">{{ a|upper }} {{ '%.3f' % s.kappa }}</span> {% endfor %}</td>
     <td>{{ algorithm_labels[m.best_algo] }}</td><td>{{ 'yes' if m.uses_dem else 'no' }}</td>
     <td class="muted">{{ m.created[:16] }}</td>
-    <td>{% if has_role('admin') %}<form class="inline" method="post" action="{{ url_for('delete_model', model_id=m.id) }}" onsubmit="return confirm('Delete this model?')">{{ csrf_field() }}<button class="btn small danger">Delete</button></form>{% endif %}</td></tr>
+    <td>{% if m.source == 'training_module' %}<span class="badge done">training module</span>{% elif has_role('admin') %}<form class="inline" method="post" action="{{ url_for('delete_model', model_id=m.id) }}" onsubmit="return confirm('Delete this model?')">{{ csrf_field() }}<button class="btn small danger">Delete</button></form>{% endif %}</td></tr>
   {% endfor %}
 </table></div>
 {% else %}<p class="empty">No models yet. Open a scene that has a reference geological map and start training.</p>{% endif %}

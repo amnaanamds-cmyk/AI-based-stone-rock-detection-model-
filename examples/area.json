@@ -1,0 +1,11 @@
+{
+  "description": "Copy this file into a dataset area folder as area.json. Every key is optional.",
+  "sensor": "auto",
+  "label_field": "UNIT",
+  "mapping": {
+    "Kohat Limestone": 1,
+    "Murree Formation": "Sandstone",
+    "Chilas Complex": "Basalt / Mafic Igneous",
+    "Qa": 7
+  }
+}

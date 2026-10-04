@@ -70,6 +70,34 @@ rockmap region query regions/gb --lon 74.31 --lat 35.92
 ### Try it without real data
 `rockmap demo` builds a synthetic study area, trains all three models, then classifies and validates it (about 2 min on a CPU). In the dashboard, the equivalent is *Dashboard → + Synthetic study area*.
 
+## Train the AI model yourself (training module)
+
+Training and the application are completely separate. You never edit application code to train or retrain.
+
+```
+dataset/raw/<area>/   ──►  python training/train.py  ──►  models/trained/model_vN/  ──►  app.py / prediction/predict.py
+image.tif + labels        preprocess · train CNN, RF,      versioned; current.json        loads the current model,
+(+ dem.tif)               SVM · evaluate · save            names the one in use           same preprocessing, predicts
+```
+
+```bash
+python training/train.py --check                 # 1. check your dataset (format: dataset/README.md)
+python training/train.py                         # 2. train -> models/trained/model_vN (becomes current)
+python training/models.py list                   # 3. all versions, * = used by the application
+python training/models.py use model_v1           #    switch back to an older version
+python prediction/predict.py image.tif --dem dem.tif   # 4. predict a map with the current model
+python app.py                                    # 5. web application (uses the current model automatically)
+```
+
+No labelled data yet? `python training/make_sample_dataset.py` creates a **synthetic** sample area, so the whole pipeline can be tried. Models trained on it are flagged *SAMPLE DATA* everywhere; they are not real geological models.
+
+| Folder | Contents |
+|---|---|
+| [`dataset/`](dataset/README.md) | your data: one folder per area with `image.tif`, `labels.tif` or `labels.geojson`, optional `dem.tif` and `area.json` |
+| [`training/`](training/README.md) | `config.py` (all settings), `train.py`, `dataset.py`, `preprocessing.py`, `evaluate.py`, `models.py` |
+| [`models/`](models/README.md) | `trained/model_v1`, `model_v2`, … plus `current.json` |
+| `prediction/` | `predict.py`: inference only (`Predictor` class and command line) |
+
 ## Important: accuracy depends on your training data
 
 The software is complete, but no machine can know the geology of Gilgit-Baltistan without examples. **A model is only as good as the reference data it is trained on.** Before trusting a map:
@@ -80,6 +108,8 @@ The software is complete, but no machine can know the geology of Gilgit-Baltista
 The built-in Gilgit-Baltistan outline is an **approximate** processing extent (about 72,150 km² against the official 72,971 km²). For administrative work, upload an official boundary.
 
 ## Documentation
+* [training/README.md](training/README.md): **training module**: how training works, settings, retraining, adding classes, changing the model
+* [dataset/README.md](dataset/README.md): **dataset format**: where to put your data and how to label it
 * [docs/RUNNING.md](docs/RUNNING.md): **how to install and run** (one command, manual, Docker, phone app)
 * [docs/DELIVERY.md](docs/DELIVERY.md): **customer installation, acceptance checklist, operations, backups**
 * [docs/PITCH.md](docs/PITCH.md): competition pitch and 7-minute demo script
@@ -105,7 +135,7 @@ The built-in Gilgit-Baltistan outline is an **approximate** processing extent (a
 
 ## Tests
 ```bash
-pytest                                  # 81 tests incl. a crawl of every page; CI runs them on Windows, macOS and Linux
+pytest                                  # 85 tests incl. a crawl of every page; CI runs them on Windows, macOS and Linux
 rockmap doctor                          # installation self-check
 ROCKMAP_NETWORK_TESTS=1 pytest          # plus a live download of Sentinel-2 + DEM near Gilgit
 ```

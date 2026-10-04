@@ -17,3 +17,9 @@ def trained_bundle(small_scene, tmp_path_factory):
     meta = train_models(small_scene["scene"], small_scene["reference"], out, small_scene["dem"],
                         samples_per_class=300, epochs=3, block_size=16)
     return out, meta
+
+
+@pytest.fixture(autouse=True)
+def _isolated_models_dir(tmp_path, monkeypatch):
+    """Tests never see (or write to) the real models/trained folder."""
+    monkeypatch.setenv("ROCKMAP_MODELS_DIR", str(tmp_path / "trained_models"))

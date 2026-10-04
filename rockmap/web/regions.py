@@ -280,7 +280,13 @@ def job_region_pipeline(ctx):
         if feats:
             model_id = _do_train(ctx, region, 0.62, 0.72)
         else:
-            ctx.log("no model and no training data: skipping lithology classification")
+            from .trained import current_real_model
+            row = current_real_model(ctx.db)
+            if row:
+                model_id = row["id"]
+                ctx.log(f"no model chosen and no training data: using the current trained model {row['version']}")
+            else:
+                ctx.log("no model and no training data: skipping lithology classification")
     if model_id:
         _do_classify(ctx, region, int(model_id), 0.72, 0.85)
     _do_products(ctx, region, 0.85, 1.0)
